@@ -1,4 +1,4 @@
-# Slice Backup – Backup, Restore & Migration...
+# Slice Backup – Backup, Restore & Migration
 
 [![WordPress](https://img.shields.io/badge/WordPress-6.2%2B-21759B?logo=wordpress&logoColor=white)](https://wordpress.org/)
 [![PHP](https://img.shields.io/badge/PHP-7.4%2B-777BB4?logo=php&logoColor=white)](https://www.php.net/)
