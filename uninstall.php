@@ -43,33 +43,30 @@ if (!is_dir($slice_backup_dir)) {
 }
 
 $slice_backup_delete_bundles = defined('SLICE_BACKUP_DELETE_BUNDLES_ON_UNINSTALL') && SLICE_BACKUP_DELETE_BUNDLES_ON_UNINSTALL;
-$slice_backup_items          = new RecursiveIteratorIterator(
-    new RecursiveDirectoryIterator($slice_backup_dir, FilesystemIterator::SKIP_DOTS),
-    RecursiveIteratorIterator::CHILD_FIRST
-);
 
-foreach ($slice_backup_items as $slice_backup_item) {
-    $slice_backup_path = $slice_backup_item->getPathname();
-    $slice_backup_name = $slice_backup_item->getFilename();
-    $slice_backup_is_bundle = (bool) preg_match('/\.(zip|slicebk)$/i', $slice_backup_name) && dirname(wp_normalize_path($slice_backup_path)) === $slice_backup_dir;
-
-    if ($slice_backup_is_bundle && !$slice_backup_delete_bundles) {
-        continue;
-    }
-    if ($slice_backup_item->isDir() && !$slice_backup_item->isLink()) {
-        @rmdir($slice_backup_path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-    } else {
-        @unlink($slice_backup_path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-    }
-}
+require_once ABSPATH . 'wp-admin/includes/class-wp-filesystem-base.php';
+require_once ABSPATH . 'wp-admin/includes/class-wp-filesystem-direct.php';
+$slice_backup_fs = new WP_Filesystem_Direct(null);
 
 if ($slice_backup_delete_bundles) {
-    @rmdir($slice_backup_dir); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-} else {
-    // Keep the web protection for the bundles that remain.
-    file_put_contents(
-        $slice_backup_dir . '/.htaccess',
-        "<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n\tOrder deny,allow\n\tDeny from all\n</IfModule>\n"
-    );
-    file_put_contents($slice_backup_dir . '/index.php', "<?php\n// Silence is golden.\n");
+    $slice_backup_fs->rmdir($slice_backup_dir, true);
+    return;
 }
+
+// Remove everything except finished bundles in the top folder.
+foreach ((array) $slice_backup_fs->dirlist($slice_backup_dir, true, false) as $slice_backup_name => $slice_backup_entry) {
+    $slice_backup_path = $slice_backup_dir . '/' . $slice_backup_name;
+    if ('d' === $slice_backup_entry['type']) {
+        $slice_backup_fs->rmdir($slice_backup_path, true);
+    } elseif (!preg_match('/\.(zip|slicebk)$/i', (string) $slice_backup_name)) {
+        wp_delete_file($slice_backup_path);
+    }
+}
+
+// Keep the web protection for the bundles that remain.
+$slice_backup_fs->put_contents(
+    $slice_backup_dir . '/.htaccess',
+    "<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n\tOrder deny,allow\n\tDeny from all\n</IfModule>\n",
+    0644
+);
+$slice_backup_fs->put_contents($slice_backup_dir . '/index.php', "<?php\n// Silence is golden.\n", 0644);

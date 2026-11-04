@@ -17,6 +17,9 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// Restoring a database means writing the site's tables directly and uncached.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
 /**
  * Job orchestration.
  */
@@ -84,32 +87,32 @@ class MigratorEngine {
     public static function startExport(array $options, string $origin = 'manual'): Job {
         $components = self::resolveComponents($options);
         if (!in_array(true, $components, true)) {
-            throw new \InvalidArgumentException(__('Nothing to export. Select at least one item to include.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Nothing to export. Select at least one item to include.', 'slice-backup'));
         }
 
         $mode      = (is_multisite() && ($options['multisite_mode'] ?? '') === 'subsite') ? 'subsite' : 'entire_network';
         $subsiteId = $mode === 'subsite' ? absint($options['subsite_id'] ?? 0) : 0;
         if ($mode === 'subsite' && ($subsiteId < 1 || !get_site($subsiteId))) {
-            throw new \InvalidArgumentException(__('Choose a valid network site to export.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Choose a valid network site to export.', 'slice-backup'));
         }
 
         $encrypt    = self::truthy($options['encrypt'] ?? false);
         $passphrase = (string) ($options['passphrase'] ?? '');
         if ($encrypt) {
             if (!Crypto::available()) {
-                throw new \InvalidArgumentException(__('Encryption needs the PHP OpenSSL extension.', 'slice-backup'));
+                throw new \InvalidArgumentException(esc_html__('Encryption needs the PHP OpenSSL extension.', 'slice-backup'));
             }
             if ($passphrase === '') {
                 $passphrase = Plugin::storedPassphrase();
             }
             if (strlen($passphrase) < 8) {
-                throw new \InvalidArgumentException(__('Enter an encryption passphrase of at least 8 characters, or save one under Settings.', 'slice-backup'));
+                throw new \InvalidArgumentException(esc_html__('Enter an encryption passphrase of at least 8 characters, or save one under Settings.', 'slice-backup'));
             }
         }
 
         $upload = self::truthy($options['upload'] ?? false);
         if ($upload && !Cloud::isConfigured()) {
-            throw new \InvalidArgumentException(__('Cloud storage is not set up. Configure it under Settings > Cloud storage.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Cloud storage is not set up. Configure it under Settings > Cloud storage.', 'slice-backup'));
         }
 
         // Site-to-site push: check the key and the other site before starting.
@@ -118,7 +121,7 @@ class MigratorEngine {
         if ($pushKey !== '') {
             $pushInfo = Peer::ping(Peer::parseKey($pushKey));
             if (!empty($pushInfo['busy'])) {
-                throw new \RuntimeException(__('The other site is running a backup or restore right now. Try again when it has finished.', 'slice-backup'));
+                throw new \RuntimeException(esc_html__('The other site is running a backup or restore right now. Try again when it has finished.', 'slice-backup'));
             }
         }
         $pushRestore = $pushKey !== '' && self::truthy($options['push_restore'] ?? false);
@@ -213,7 +216,7 @@ class MigratorEngine {
             $sealed = Crypto::seal($passphrase);
         }
         if (!class_exists('ZipArchive')) {
-            throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
         }
 
         if (isset($options['restore_core']) && !isset($options['restore_wp_core'])) {
@@ -224,7 +227,7 @@ class MigratorEngine {
             $want[$key] = self::truthy($options['restore_' . $key] ?? in_array($key, array('db', 'uploads'), true));
         }
         if (!in_array(true, $want, true)) {
-            throw new \InvalidArgumentException(__('Select at least one item to restore.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Select at least one item to restore.', 'slice-backup'));
         }
 
         $steps = array();
@@ -277,7 +280,7 @@ class MigratorEngine {
     public static function startUpload(string $filename, string $origin = 'manual'): Job {
         $path = Storage::path($filename);
         if (!Cloud::isConfigured()) {
-            throw new \InvalidArgumentException(__('Cloud storage is not set up.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Cloud storage is not set up.', 'slice-backup'));
         }
         $job       = Job::create('upload', array('upload', 'finalize'), array('filename' => $filename), $origin);
         $job->data = array('name' => $filename, 'file' => $path);
@@ -294,7 +297,7 @@ class MigratorEngine {
     public static function startPull(string $key, array $options, string $origin = 'manual'): Job {
         $info = Peer::ping(Peer::parseKey($key));
         if (!empty($info['busy'])) {
-            throw new \RuntimeException(__('The other site is running a backup or restore right now. Try again when it has finished.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('The other site is running a backup or restore right now. Try again when it has finished.', 'slice-backup'));
         }
         $preset = sanitize_key((string) ($options['export_type'] ?? 'full'));
         $job    = Job::create(
@@ -334,8 +337,8 @@ class MigratorEngine {
             }
             if ($status !== 'running') {
                 throw new \RuntimeException(
-                    /* translators: %s: error message from the other site. */
-                    sprintf(__('The other site reported: %s', 'slice-backup'), (string) ($remote['error'] ?? $status))
+                    esc_html(/* translators: %s: error message from the other site. */
+                    sprintf(__('The other site reported: %s', 'slice-backup'), (string) ($remote['error'] ?? $status)))
                 );
             }
         }
@@ -349,13 +352,13 @@ class MigratorEngine {
      */
     public static function startDownload(string $filename, string $origin = 'manual'): Job {
         if (!Storage::isBundleName($filename)) {
-            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Invalid bundle file name.', 'slice-backup'));
         }
         if (is_file(Storage::dir() . '/' . $filename)) {
-            throw new \InvalidArgumentException(__('This bundle is already on the server.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('This bundle is already on the server.', 'slice-backup'));
         }
         if (!Cloud::isConfigured()) {
-            throw new \InvalidArgumentException(__('Cloud storage is not set up.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Cloud storage is not set up.', 'slice-backup'));
         }
         $job       = Job::create('download', array('download', 'finalize'), array('filename' => $filename), $origin);
         $job->data = array('name' => $filename, 'part' => $job->workDir() . '/download.part');
@@ -414,7 +417,7 @@ class MigratorEngine {
                 $job->save();
             }
         } catch (\Throwable $e) {
-            self::onFailure($job, $e->getMessage());
+            self::onFailure($job, Plugin::errorText($e));
         } finally {
             $job->unlockTick($lock);
         }
@@ -523,18 +526,18 @@ class MigratorEngine {
             if (is_dir($path)) {
                 Storage::removeDirectory($path);
             } else {
-                @unlink($path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                wp_delete_file($path);
             }
         }
         // A failed download leaves no partial bundle behind.
         if ($failed && in_array($job->type, array('download', 'pull'), true) && !empty($job->data['final']) && is_file((string) $job->data['final'])) {
-            @unlink((string) $job->data['final']); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            wp_delete_file((string) $job->data['final']);
         }
     }
 
     private static function prepareEnvironment(): void {
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running step; each step is still time-budgeted.
         }
         ignore_user_abort(true);
         wp_raise_memory_limit('admin');
@@ -637,8 +640,8 @@ class MigratorEngine {
                     sprintf(__('%1$s of %2$s files', 'slice-backup'), number_format_i18n((int) $state['added']), number_format_i18n((int) $state['total']))
                 );
                 if ($done) {
-                    @unlink((string) $job->data['list']); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-                    @unlink((string) $job->data['sql']);  // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                    wp_delete_file((string) $job->data['list']);
+                    wp_delete_file((string) $job->data['sql']);
                     $job->data['file'] = (string) $job->data['zip'];
                 }
                 return $done;
@@ -654,7 +657,7 @@ class MigratorEngine {
                 $size = max(1.0, Storage::filesize($source));
                 self::setProgress($job, __('Encrypting', 'slice-backup'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
                 if ($done) {
-                    @unlink($source); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                    wp_delete_file($source);
                     $job->data['file'] = $target;
                 }
                 return $done;
@@ -662,7 +665,7 @@ class MigratorEngine {
             case 'store':
                 $final = Storage::dir() . '/' . $job->data['name'];
                 if (!@rename((string) $job->data['file'], $final)) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename
-                    throw new \RuntimeException(__('Could not move the finished bundle into the backup folder.', 'slice-backup'));
+                    throw new \RuntimeException(esc_html__('Could not move the finished bundle into the backup folder.', 'slice-backup'));
                 }
                 $job->data['file'] = $final;
                 self::setProgress($job, __('Saved', 'slice-backup'), 1.0);
@@ -713,7 +716,7 @@ class MigratorEngine {
                     return false;
                 }
                 if (empty($result['bundleFile']) || !Storage::isBundleName((string) $result['bundleFile'])) {
-                    throw new \RuntimeException(__('The other site did not report a bundle.', 'slice-backup'));
+                    throw new \RuntimeException(esc_html__('The other site did not report a bundle.', 'slice-backup'));
                 }
                 $job->data['name']       = (string) $result['bundleFile'];
                 $job->data['remoteSize'] = (float) ($result['sizeBytes'] ?? 0);
@@ -741,7 +744,7 @@ class MigratorEngine {
                         180
                     )['body'];
                     if ($data === '') {
-                        throw new \RuntimeException(__('The other site sent an empty response.', 'slice-backup'));
+                        throw new \RuntimeException(esc_html__('The other site sent an empty response.', 'slice-backup'));
                     }
                     Cloud::appendChunk($part, $data);
                     $state['offset'] = (float) $state['offset'] + strlen($data);
@@ -793,7 +796,7 @@ class MigratorEngine {
                     $manifest     = is_file($manifestFile) ? json_decode((string) file_get_contents($manifestFile), true) : null; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
                     $job->data['manifest'] = is_array($manifest) ? $manifest : array();
                     if ((string) $job->data['zip'] !== Storage::dir() . '/' . $job->options['filename']) {
-                        @unlink((string) $job->data['zip']); // Decrypted temporary copy. phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                        wp_delete_file((string) $job->data['zip']);
                     }
                 }
                 return $done;
@@ -829,7 +832,7 @@ class MigratorEngine {
                 return true;
         }
 
-        throw new \RuntimeException(sprintf('Unknown job step: %s', $step));
+        throw new \RuntimeException(esc_html(sprintf('Unknown job step: %s', $step)));
     }
 
     /**
@@ -848,7 +851,7 @@ class MigratorEngine {
 
         $handle = fopen($file, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not read the bundle for sending.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not read the bundle for sending.', 'slice-backup'));
         }
         try {
             $first = true;
@@ -930,7 +933,7 @@ class MigratorEngine {
 
         $handle = fopen($file, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not read the database file from the bundle.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not read the database file from the bundle.', 'slice-backup'));
         }
         Crypto::seek($handle, (float) $state['pos']);
         $size = max(1.0, Storage::filesize($file));
@@ -971,7 +974,7 @@ class MigratorEngine {
             }
 
             $wpdb->check_current_query = false;
-            if ($wpdb->query($sql) === false) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Statements from the bundle's SQL dump.
+            if ($wpdb->query($sql) === false) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Restoring runs the statements of the bundle's own SQL dump (values escaped when it was written). Only administrators can start a restore.
                 $state['errors']++;
                 if (count($state['errorSamples']) < 5) {
                     $state['errorSamples'][] = substr((string) $wpdb->last_error, 0, 300);
@@ -1248,7 +1251,7 @@ class MigratorEngine {
                 }
                 $final = Storage::dir() . '/' . $job->data['name'];
                 if (!@rename((string) $job->data['part'], $final)) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename
-                    throw new \RuntimeException(__('Could not save the downloaded bundle.', 'slice-backup'));
+                    throw new \RuntimeException(esc_html__('Could not save the downloaded bundle.', 'slice-backup'));
                 }
                 $job->data['final']  = $final;
                 $job->data['result'] = array('success' => true, 'bundleFile' => $job->data['name']);
@@ -1309,7 +1312,7 @@ class MigratorEngine {
         $usermeta = $to . 'usermeta';
         $metaKeys = '(capabilities|user_level|user-settings|user-settings-time|dashboard_quick_press_last_post_id|persisted_preferences|media_library_mode)';
 
-        $rows = $wpdb->get_results($wpdb->prepare('SELECT umeta_id, meta_key FROM ' . DbUtil::ident($usermeta) . ' WHERE meta_key LIKE %s', $wpdb->esc_like($from) . '%')); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $rows = $wpdb->get_results($wpdb->prepare('SELECT umeta_id, meta_key FROM %i WHERE meta_key LIKE %s', $usermeta, $wpdb->esc_like($from) . '%')); // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- One-time rename after a restore.
         foreach ((array) $rows as $row) {
             if (preg_match('/^' . $quoted . '((?:\d+_)?' . $metaKeys . ')$/', (string) $row->meta_key, $m)) {
                 $wpdb->update($usermeta, array('meta_key' => $to . $m[1]), array('umeta_id' => $row->umeta_id)); // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
@@ -1317,7 +1320,7 @@ class MigratorEngine {
         }
 
         foreach (DbUtil::optionsTables() as $table) {
-            $options = $wpdb->get_results($wpdb->prepare('SELECT option_id, option_name FROM ' . DbUtil::ident($table) . ' WHERE option_name LIKE %s', $wpdb->esc_like($from) . '%user_roles')); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+            $options = $wpdb->get_results($wpdb->prepare('SELECT option_id, option_name FROM %i WHERE option_name LIKE %s', $table, $wpdb->esc_like($from) . '%user_roles'));
             foreach ((array) $options as $option) {
                 if (preg_match('/^' . $quoted . '(\d+_)?user_roles$/', (string) $option->option_name, $m)) {
                     $wpdb->update($table, array('option_name' => $to . ($m[1] ?? '') . 'user_roles'), array('option_id' => $option->option_id));
@@ -1365,7 +1368,7 @@ class MigratorEngine {
     public function executeExport(array $options = array(), string $origin = 'rest'): array {
         $job = self::runToCompletion(self::startExport($options, $origin));
         if ($job->status !== 'done') {
-            throw new \RuntimeException($job->error);
+            throw new \RuntimeException(esc_html($job->error));
         }
         return (array) $job->data['result'];
     }
@@ -1378,7 +1381,7 @@ class MigratorEngine {
     public function executeRestore(string $filename, array $options = array(), string $origin = 'rest'): array {
         $job = self::runToCompletion(self::startRestore($filename, $options, $origin));
         if ($job->status !== 'done') {
-            throw new \RuntimeException($job->error);
+            throw new \RuntimeException(esc_html($job->error));
         }
         return (array) $job->data['result'];
     }

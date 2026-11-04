@@ -16,6 +16,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// Rewriting URLs during a migration must update every table directly and uncached;
+// identifiers go through %i placeholders.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
 /**
  * Replaces URLs (or any strings) in every text column of the WordPress tables.
  */
@@ -155,15 +159,19 @@ class RecursiveSearchReplace {
         }
 
         {
+            // Every fragment is produced by $wpdb->prepare() with %i for identifiers.
             $likes = array();
             foreach ($columns as $col) {
                 foreach (array_keys($pairs) as $from) {
-                    $likes[] = $wpdb->prepare(DbUtil::ident($col) . ' LIKE %s', '%' . $wpdb->esc_like((string) $from) . '%');
+                    $likes[] = $wpdb->prepare('%i LIKE %s', $col, '%' . $wpdb->esc_like((string) $from) . '%');
                 }
             }
             $match  = '(' . implode(' OR ', $likes) . ')';
-            $select = 'SELECT ' . DbUtil::ident($pk['column']) . ', ' . implode(', ', array_map(array(DbUtil::class, 'ident'), $columns))
-                . ' FROM ' . DbUtil::ident($table);
+            $fields = array();
+            foreach (array_merge(array($pk['column']), $columns) as $col) {
+                $fields[] = $wpdb->prepare('%i', $col);
+            }
+            $select = 'SELECT ' . implode(', ', $fields) . $wpdb->prepare(' FROM %i', $table);
 
             $last   = $state['last'];
             $chunks = 0;
@@ -173,18 +181,18 @@ class RecursiveSearchReplace {
                     return false;
                 }
                 if (function_exists('set_time_limit')) {
-                    @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                    @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running step; each step is still time-budgeted.
                 }
 
                 $where = $match;
                 if ($last !== null) {
                     $where .= ' AND ' . ($pk['numeric']
-                        ? $wpdb->prepare(DbUtil::ident($pk['column']) . ' > %d', $last)
-                        : $wpdb->prepare(DbUtil::ident($pk['column']) . ' > %s', $last));
+                        ? $wpdb->prepare('%i > %d', $pk['column'], $last)
+                        : $wpdb->prepare('%i > %s', $pk['column'], $last));
                 }
 
-                $sql  = $select . ' WHERE ' . $where . ' ORDER BY ' . DbUtil::ident($pk['column']) . ' ASC LIMIT ' . self::ROWS_PER_QUERY;
-                $rows = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Built from quoted identifiers and prepared fragments.
+                $sql  = $select . ' WHERE ' . $where . $wpdb->prepare(' ORDER BY %i ASC LIMIT %d', $pk['column'], self::ROWS_PER_QUERY);
+                $rows = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
                 if (empty($rows)) {
                     break;
                 }
@@ -240,17 +248,17 @@ class RecursiveSearchReplace {
         $tables = DbUtil::tables($base);
 
         if (in_array($base . 'site', $tables, true)) {
-            $wpdb->query($wpdb->prepare('UPDATE ' . DbUtil::ident($base . 'site') . ' SET domain = %s WHERE domain = %s', $new, $old)); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $wpdb->query($wpdb->prepare('UPDATE %i SET domain = %s WHERE domain = %s', $base . 'site', $new, $old));
         }
 
         if (in_array($base . 'blogs', $tables, true)) {
-            $blogs = DbUtil::ident($base . 'blogs');
             // Exact match (main site / subdirectory installs).
-            $wpdb->query($wpdb->prepare("UPDATE {$blogs} SET domain = %s WHERE domain = %s", $new, $old)); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $wpdb->query($wpdb->prepare('UPDATE %i SET domain = %s WHERE domain = %s', $base . 'blogs', $new, $old));
             // Subdomains: shop.old.com -> shop.new.com.
-            $wpdb->query( // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $wpdb->query(
                 $wpdb->prepare(
-                    "UPDATE {$blogs} SET domain = CONCAT(LEFT(domain, CHAR_LENGTH(domain) - %d), %s) WHERE domain LIKE %s",
+                    'UPDATE %i SET domain = CONCAT(LEFT(domain, CHAR_LENGTH(domain) - %d), %s) WHERE domain LIKE %s',
+                    $base . 'blogs',
                     strlen($old),
                     $new,
                     '%.' . $wpdb->esc_like($old)
@@ -259,8 +267,7 @@ class RecursiveSearchReplace {
         }
 
         if (in_array($base . 'sitemeta', $tables, true)) {
-            $sitemeta = DbUtil::ident($base . 'sitemeta');
-            $rows     = $wpdb->get_results($wpdb->prepare("SELECT meta_id, meta_value FROM {$sitemeta} WHERE meta_value LIKE %s", '%' . $wpdb->esc_like($old) . '%')); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $rows = $wpdb->get_results($wpdb->prepare('SELECT meta_id, meta_value FROM %i WHERE meta_value LIKE %s', $base . 'sitemeta', '%' . $wpdb->esc_like($old) . '%'));
             foreach ((array) $rows as $row) {
                 $updated = $this->replaceString((string) $row->meta_value, array('//' . $old => '//' . $new));
                 if ($updated !== $row->meta_value) {

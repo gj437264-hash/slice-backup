@@ -66,8 +66,7 @@ final class AjaxController {
      * Reads a POST field. Call only after guard() (or a token check).
      */
     private static function post(string $key, string $default = ''): string {
-        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Verified in guard() or by job token.
-        return isset($_POST[$key]) && is_scalar($_POST[$key]) ? (string) wp_unslash($_POST[$key]) : $default; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Sanitized by callers.
+        return isset($_POST[$key]) && is_scalar($_POST[$key]) ? (string) wp_unslash($_POST[$key]) : $default; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Nonce verified in guard() (or job token checked); values sanitized by callers.
     }
 
     private static function flag(string $key, bool $default = false): bool {
@@ -77,7 +76,7 @@ final class AjaxController {
 
     private static function fail(\Throwable $e): void {
         $status = $e instanceof \InvalidArgumentException ? 400 : 500;
-        wp_send_json_error(array('message' => $e->getMessage()), $status);
+        wp_send_json_error(array('message' => Plugin::errorText($e)), $status);
     }
 
     /**
@@ -149,7 +148,7 @@ final class AjaxController {
                     break;
 
                 default:
-                    throw new \InvalidArgumentException(__('Unknown job type.', 'slice-backup'));
+                    throw new \InvalidArgumentException(esc_html__('Unknown job type.', 'slice-backup'));
             }
 
             MigratorEngine::scheduleBackgroundTick($job);
@@ -202,7 +201,7 @@ final class AjaxController {
         self::guard();
         try {
             if (!Plugin::settings()['schedule']['enabled']) {
-                throw new \InvalidArgumentException(__('Turn on scheduled backups first.', 'slice-backup'));
+                throw new \InvalidArgumentException(esc_html__('Turn on scheduled backups first.', 'slice-backup'));
             }
             $schedule = Plugin::settings()['schedule'];
             $job      = MigratorEngine::startExport(
@@ -269,7 +268,7 @@ final class AjaxController {
                 try {
                     $raw = Crypto::readEncryptedManifest($path, $passphrase);
                 } catch (\Throwable $e) {
-                    wp_send_json_success(array('filename' => $name, 'formattedSize' => size_format(Storage::filesize($path), 1), 'encrypted' => true, 'needsPassphrase' => true, 'passphraseError' => $e->getMessage(), 'manifest' => null, 'warnings' => array()));
+                    wp_send_json_success(array('filename' => $name, 'formattedSize' => size_format(Storage::filesize($path), 1), 'encrypted' => true, 'needsPassphrase' => true, 'passphraseError' => Plugin::errorText($e), 'manifest' => null, 'warnings' => array()));
                 }
             } else {
                 $raw = Storage::readManifest($path);
@@ -334,7 +333,7 @@ final class AjaxController {
         try {
             $name = sanitize_file_name(self::post('file'));
             if (!Storage::delete($name)) {
-                throw new \RuntimeException(__('The file could not be deleted. Check the folder permissions.', 'slice-backup'));
+                throw new \RuntimeException(esc_html__('The file could not be deleted. Check the folder permissions.', 'slice-backup'));
             }
             wp_send_json_success(array('deleted' => $name));
         } catch (\Throwable $e) {
@@ -352,7 +351,7 @@ final class AjaxController {
             // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- Verified in guard(); tmp_name is a server path.
             $tmp = isset($_FILES['chunk']['tmp_name']) ? (string) $_FILES['chunk']['tmp_name'] : '';
             if ($tmp === '' || !is_uploaded_file($tmp)) {
-                throw new \InvalidArgumentException(__('No upload data was received. The piece may exceed the server upload limit.', 'slice-backup'));
+                throw new \InvalidArgumentException(esc_html__('No upload data was received. The piece may exceed the server upload limit.', 'slice-backup'));
             }
 
             $result = Storage::receiveChunk(self::post('upload_id'), (float) self::post('offset', '0'), (float) self::post('total_size', '0'), self::post('filename'), $tmp);
@@ -527,7 +526,7 @@ final class AjaxController {
         try {
             $stored = Crypto::open((string) get_transient('slice_backup_dropbox_pkce_' . get_current_user_id()));
             if ($stored === '' || strpos($stored, '|') === false) {
-                throw new \InvalidArgumentException(__('The connection request expired. Click "Connect Dropbox" again.', 'slice-backup'));
+                throw new \InvalidArgumentException(esc_html__('The connection request expired. Click "Connect Dropbox" again.', 'slice-backup'));
             }
             list($verifier, $appKey) = explode('|', $stored, 2);
             $result = DropboxDestination::exchangeCode($appKey, sanitize_text_field(self::post('code')), $verifier);
@@ -585,7 +584,7 @@ final class AjaxController {
         try {
             $path = Storage::path($name);
         } catch (\Throwable $e) {
-            wp_die(esc_html($e->getMessage()), '', array('response' => 404));
+            wp_die(esc_html(Plugin::errorText($e)), '', array('response' => 404));
         }
 
         Storage::streamFile($path);

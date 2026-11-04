@@ -33,4 +33,13 @@ final class DropboxError extends \RuntimeException {
         $this->summary = $summary;
         $this->data    = $data;
     }
+
+    /**
+     * Creates the error with an HTML-escaped message.
+     *
+     * @param array<string, mixed> $data
+     */
+    public static function make(string $message, int $status, string $summary, array $data = array()): self {
+        return new self(esc_html($message), $status, $summary, $data);
+    }
 }

@@ -13,6 +13,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// A backup tool must read the site's tables directly and uncached; table and column
+// names come from SHOW TABLES / SHOW COLUMNS and are passed through %i placeholders.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
 /**
  * Database utility helpers.
  */
@@ -63,7 +67,7 @@ final class DbUtil {
     public static function primaryKey(string $table): ?array {
         global $wpdb;
 
-        $keys = $wpdb->get_results('SHOW KEYS FROM ' . self::ident($table) . " WHERE Key_name = 'PRIMARY'");
+        $keys = $wpdb->get_results($wpdb->prepare('SHOW KEYS FROM %i WHERE Key_name = %s', $table, 'PRIMARY'));
         if (!is_array($keys) || count($keys) !== 1 || !isset($keys[0]->Column_name)) {
             return null;
         }
@@ -89,7 +93,7 @@ final class DbUtil {
     public static function columns(string $table): array {
         global $wpdb;
 
-        $rows    = $wpdb->get_results('SHOW COLUMNS FROM ' . self::ident($table));
+        $rows    = $wpdb->get_results($wpdb->prepare('SHOW COLUMNS FROM %i', $table));
         $columns = array();
         foreach ((array) $rows as $row) {
             if (isset($row->Field, $row->Type)) {

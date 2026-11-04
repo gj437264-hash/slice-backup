@@ -154,7 +154,7 @@ final class RestController {
     }
 
     private static function error(\Throwable $e): \WP_Error {
-        return new \WP_Error('slice_backup_error', $e->getMessage(), array('status' => $e instanceof \InvalidArgumentException ? 400 : 500));
+        return new \WP_Error('slice_backup_error', Plugin::errorText($e), array('status' => $e instanceof \InvalidArgumentException ? 400 : 500));
     }
 
     /**

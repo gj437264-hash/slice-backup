@@ -109,8 +109,8 @@ final class Scheduler {
         try {
             $job = MigratorEngine::startExport($options, 'schedule');
         } catch (\Throwable $e) {
-            update_site_option(self::OPTION_LAST, array('time' => time(), 'status' => 'failed', 'error' => $e->getMessage(), 'file' => ''));
-            Notifier::send(false, __('The scheduled backup could not start.', 'slice-backup') . ' ' . $e->getMessage(), array());
+            update_site_option(self::OPTION_LAST, array('time' => time(), 'status' => 'failed', 'error' => Plugin::errorText($e), 'file' => ''));
+            Notifier::send(false, __('The scheduled backup could not start.', 'slice-backup') . ' ' . Plugin::errorText($e), array());
             return;
         }
 

@@ -66,8 +66,8 @@ final class S3Client {
         );
         if (is_wp_error($response)) {
             throw new \RuntimeException(
-                /* translators: %s: error message. */
-                sprintf(__('Could not connect to the storage service: %s', 'slice-backup'), $response->get_error_message())
+                esc_html(/* translators: %s: error message. */
+                sprintf(__('Could not connect to the storage service: %s', 'slice-backup'), $response->get_error_message()))
             );
         }
 
@@ -205,7 +205,7 @@ final class S3Client {
      */
     private static function expectOk(array $response): void {
         if ($response['code'] < 200 || $response['code'] >= 300) {
-            throw new \RuntimeException(self::errorMessage($response));
+            throw new \RuntimeException(esc_html(self::errorMessage($response)));
         }
     }
 
@@ -237,7 +237,7 @@ final class S3Client {
             self::expectOk($response);
             $xml = self::xml($response['body']);
             if ($xml === null) {
-                throw new \RuntimeException(__('The storage service returned an unreadable listing.', 'slice-backup'));
+                throw new \RuntimeException(esc_html__('The storage service returned an unreadable listing.', 'slice-backup'));
             }
             $last = '';
             foreach ($xml->Contents as $object) {
@@ -284,7 +284,7 @@ final class S3Client {
         $xml = self::xml($response['body']);
         $id  = $xml !== null ? (string) $xml->UploadId : '';
         if ($id === '') {
-            throw new \RuntimeException(__('The storage service did not start the upload.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('The storage service did not start the upload.', 'slice-backup'));
         }
         return $id;
     }
@@ -294,7 +294,7 @@ final class S3Client {
         self::expectOk($response);
         $etag = $response['headers']['etag'] ?? '';
         if ($etag === '') {
-            throw new \RuntimeException(__('The storage service did not confirm an uploaded part.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('The storage service did not confirm an uploaded part.', 'slice-backup'));
         }
         return $etag;
     }
@@ -314,7 +314,7 @@ final class S3Client {
         self::expectOk($response);
         // S3 can report an error inside a 200 response.
         if (strpos($response['body'], '<Error>') !== false) {
-            throw new \RuntimeException(self::errorMessage(array('code' => 500, 'body' => $response['body'], 'headers' => array())));
+            throw new \RuntimeException(esc_html(self::errorMessage(array('code' => 500, 'body' => $response['body'], 'headers' => array()))));
         }
     }
 

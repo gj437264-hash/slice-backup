@@ -40,11 +40,11 @@ final class Storage {
 
         if (!is_dir($dir) && !wp_mkdir_p($dir)) {
             throw new \RuntimeException(
-                sprintf(
+                esc_html(sprintf(
                     /* translators: %s: folder path. */
                     __('Could not create the storage folder %s. Make sure wp-content/uploads is writable.', 'slice-backup'),
                     $dir
-                )
+                ))
             );
         }
 
@@ -119,13 +119,13 @@ final class Storage {
      */
     public static function path(string $name): string {
         if (!self::isBundleName($name)) {
-            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Invalid bundle file name.', 'slice-backup'));
         }
         $path = self::dir() . '/' . $name;
         if (!is_file($path)) {
             throw new \RuntimeException(
-                /* translators: %s: file name. */
-                sprintf(__('Bundle not found: %s', 'slice-backup'), $name)
+                esc_html(/* translators: %s: file name. */
+                sprintf(__('Bundle not found: %s', 'slice-backup'), $name))
             );
         }
         return $path;
@@ -277,7 +277,7 @@ final class Storage {
      */
     public static function delete(string $name): bool {
         $path = self::path($name);
-        @unlink($path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+        wp_delete_file($path);
         return !file_exists($path);
     }
 
@@ -328,13 +328,13 @@ final class Storage {
         $uploadId = strtolower((string) preg_replace('/[^a-zA-Z0-9]/', '', $uploadId));
         $name     = sanitize_file_name($name);
         if (strlen($uploadId) < 16 || strlen($uploadId) > 64) {
-            throw new \InvalidArgumentException(__('Invalid upload ID.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Invalid upload ID.', 'slice-backup'));
         }
         if (!preg_match('/\.(zip|slicebk)$/i', $name)) {
-            throw new \InvalidArgumentException(__('Only .zip and .slicebk bundles can be uploaded.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Only .zip and .slicebk bundles can be uploaded.', 'slice-backup'));
         }
         if ($total <= 0) {
-            throw new \InvalidArgumentException(__('The file is empty.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('The file is empty.', 'slice-backup'));
         }
 
         $part    = self::dir() . '/' . $uploadId . '.part';
@@ -357,7 +357,7 @@ final class Storage {
             $ok = file_put_contents($part, $data, FILE_APPEND) !== false; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
         }
         if (!$ok) {
-            throw new \RuntimeException(__('Could not write the uploaded data. Check free disk space.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not write the uploaded data. Check free disk space.', 'slice-backup'));
         }
 
         clearstatcache(true, $part);
@@ -366,34 +366,34 @@ final class Storage {
             return array('complete' => false, 'received' => $received);
         }
         if ($received > $total) {
-            @unlink($part); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-            throw new \RuntimeException(__('The uploaded file is larger than expected. Please upload it again.', 'slice-backup'));
+            wp_delete_file($part);
+            throw new \RuntimeException(esc_html__('The uploaded file is larger than expected. Please upload it again.', 'slice-backup'));
         }
 
         if (Crypto::isEncryptedFile($part)) {
             $name = (string) preg_replace('/\.zip$/i', '.slicebk', $name);
         } else {
             if (!class_exists('ZipArchive')) {
-                @unlink($part); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-                throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
+                wp_delete_file($part);
+                throw new \RuntimeException(esc_html__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
             }
             $zip = new \ZipArchive();
             if ($zip->open($part) !== true) {
-                @unlink($part); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-                throw new \InvalidArgumentException(__('The uploaded file is not a valid zip archive.', 'slice-backup'));
+                wp_delete_file($part);
+                throw new \InvalidArgumentException(esc_html__('The uploaded file is not a valid zip archive.', 'slice-backup'));
             }
             $hasContent = $zip->locateName('bundle.json') !== false || $zip->locateName('database.sql') !== false;
             $zip->close();
             if (!$hasContent) {
-                @unlink($part); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-                throw new \InvalidArgumentException(__('This zip file is not a Slice Backup bundle (bundle.json is missing).', 'slice-backup'));
+                wp_delete_file($part);
+                throw new \InvalidArgumentException(esc_html__('This zip file is not a Slice Backup bundle (bundle.json is missing).', 'slice-backup'));
             }
             $name = (string) preg_replace('/\.slicebk$/i', '.zip', $name);
         }
 
         $final = wp_unique_filename(self::dir(), $name);
         if (!rename($part, self::dir() . '/' . $final)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename
-            throw new \RuntimeException(__('Could not save the uploaded bundle.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not save the uploaded bundle.', 'slice-backup'));
         }
         return array('complete' => true, 'filename' => $final);
     }
@@ -407,7 +407,7 @@ final class Storage {
         $path   = self::path($name);
         $handle = fopen($path, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not read the bundle.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not read the bundle.', 'slice-backup'));
         }
         Crypto::seek($handle, $offset);
         $data = (string) fread($handle, max(1, min($length, 16777216))); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
@@ -440,9 +440,9 @@ final class Storage {
             if (strpos($entry, 'extract_') === 0 && is_dir($path)) {
                 self::removeDirectory($path);
             } elseif (preg_match('/^database-[a-z0-9]+\.sql$/', $entry) && is_file($path)) {
-                @unlink($path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                wp_delete_file($path);
             } elseif (substr($entry, -5) === '.part' && is_file($path) && ($now - (int) filemtime($path)) > DAY_IN_SECONDS) {
-                @unlink($path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                wp_delete_file($path);
             }
         }
     }
@@ -454,18 +454,23 @@ final class Storage {
         if (!is_dir($dir)) {
             return;
         }
-        $items = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::CHILD_FIRST
-        );
-        foreach ($items as $item) {
-            if ($item->isDir() && !$item->isLink()) {
-                @rmdir($item->getPathname()); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-            } else {
-                @unlink($item->getPathname()); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-            }
+        self::filesystem()->rmdir($dir, true);
+    }
+
+    /**
+     * Direct-access WordPress filesystem for the plugin's own working folder.
+     *
+     * The working folder is created by PHP itself, so direct access is always
+     * the correct method; no credentials prompt is ever needed.
+     */
+    public static function filesystem(): \WP_Filesystem_Direct {
+        static $fs = null;
+        if (null === $fs) {
+            require_once ABSPATH . 'wp-admin/includes/class-wp-filesystem-base.php';
+            require_once ABSPATH . 'wp-admin/includes/class-wp-filesystem-direct.php';
+            $fs = new \WP_Filesystem_Direct(null);
         }
-        @rmdir($dir); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+        return $fs;
     }
 
     /**
@@ -480,7 +485,7 @@ final class Storage {
         }
 
         if (!add_site_option(self::LOCK_OPTION, array('op' => $operation, 'time' => time()))) {
-            throw new \RuntimeException(__('Another backup or restore is already running. Wait for it to finish, then try again.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Another backup or restore is already running. Wait for it to finish, then try again.', 'slice-backup'));
         }
     }
 
@@ -546,12 +551,12 @@ final class Storage {
             session_write_close();
         }
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running step; each step is still time-budgeted.
         }
         if (function_exists('apache_setenv')) {
             @apache_setenv('no-gzip', '1'); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
         }
-        @ini_set('zlib.output_compression', 'Off'); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.PHP.IniSet.Risky
+        @ini_set('zlib.output_compression', 'Off'); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.PHP.IniSet.Risky, Squiz.PHP.DiscouragedFunctions.Discouraged -- compression would corrupt the binary download.
 
         // Output buffers would hold the whole file in memory.
         while (ob_get_level() > 0) {

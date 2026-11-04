@@ -41,7 +41,7 @@ final class Crypto {
      */
     private static function requireAvailable(): void {
         if (!self::available()) {
-            throw new \RuntimeException(__('Encryption needs the PHP OpenSSL extension with AES-256-GCM. Ask your host to enable it.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Encryption needs the PHP OpenSSL extension with AES-256-GCM. Ask your host to enable it.', 'slice-backup'));
         }
     }
 
@@ -69,7 +69,7 @@ final class Crypto {
     public static function encryptStep(string $source, string $target, string $passphrase, array $manifest, array &$state, float $deadline): bool {
         self::requireAvailable();
         if ($passphrase === '') {
-            throw new \RuntimeException(__('An encryption passphrase is required.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('An encryption passphrase is required.', 'slice-backup'));
         }
 
         $size = Storage::filesize($source);
@@ -109,7 +109,7 @@ final class Crypto {
         $in  = fopen($source, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         $out = fopen($target, 'ab'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$in || !$out) {
-            throw new \RuntimeException(__('Could not open the files for encryption.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not open the files for encryption.', 'slice-backup'));
         }
         self::seek($in, (float) $state['offset']);
 
@@ -121,16 +121,16 @@ final class Crypto {
             $state['offset'] = (float) $state['offset'] + strlen($plain);
             $final = $state['offset'] >= $size;
             if ($plain === '' && !$final) {
-                throw new \RuntimeException(__('The bundle changed while it was being encrypted.', 'slice-backup'));
+                throw new \RuntimeException(esc_html__('The bundle changed while it was being encrypted.', 'slice-backup'));
             }
             $index = (int) $state['index'];
             $tag   = '';
             $ct    = openssl_encrypt($plain, self::CIPHER, $key, OPENSSL_RAW_DATA, $prefix . pack('N', $index), $tag, $header . pack('N', $index) . ($final ? "\x01" : "\x00"));
             if ($ct === false) {
-                throw new \RuntimeException(__('Encryption failed.', 'slice-backup'));
+                throw new \RuntimeException(esc_html__('Encryption failed.', 'slice-backup'));
             }
             if (fwrite($out, pack('N', strlen($ct)) . $ct . $tag) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
-                throw new \RuntimeException(__('Writing the encrypted bundle failed. The disk may be full.', 'slice-backup'));
+                throw new \RuntimeException(esc_html__('Writing the encrypted bundle failed. The disk may be full.', 'slice-backup'));
             }
             $state['index'] = $index + 1;
             if ($final) {
@@ -155,7 +155,7 @@ final class Crypto {
 
         $in = fopen($source, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$in) {
-            throw new \RuntimeException(__('Could not open the encrypted bundle.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not open the encrypted bundle.', 'slice-backup'));
         }
         $info   = self::readHeader($in);
         $key    = self::deriveKey($passphrase, $info['salt'], $info['iter']);
@@ -169,7 +169,7 @@ final class Crypto {
         $out = fopen($target, 'ab'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$out) {
             fclose($in); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-            throw new \RuntimeException(__('Could not write the decrypted bundle.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not write the decrypted bundle.', 'slice-backup'));
         }
         self::seek($in, (float) $state['offset']);
 
@@ -180,16 +180,16 @@ final class Crypto {
                 $first  = false;
                 $lenRaw = fread($in, 4); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
                 if (!is_string($lenRaw) || strlen($lenRaw) !== 4) {
-                    throw new \RuntimeException(__('The encrypted bundle is truncated.', 'slice-backup'));
+                    throw new \RuntimeException(esc_html__('The encrypted bundle is truncated.', 'slice-backup'));
                 }
                 $len = (int) unpack('N', $lenRaw)[1];
                 if ($len > self::CHUNK + 64) {
-                    throw new \RuntimeException(__('The encrypted bundle is damaged.', 'slice-backup'));
+                    throw new \RuntimeException(esc_html__('The encrypted bundle is damaged.', 'slice-backup'));
                 }
                 $ct  = $len > 0 ? (string) fread($in, $len) : ''; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
                 $tag = (string) fread($in, 16); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
                 if (strlen($ct) !== $len || strlen($tag) !== 16) {
-                    throw new \RuntimeException(__('The encrypted bundle is truncated.', 'slice-backup'));
+                    throw new \RuntimeException(esc_html__('The encrypted bundle is truncated.', 'slice-backup'));
                 }
 
                 $next  = (float) $state['offset'] + 4 + $len + 16;
@@ -198,9 +198,9 @@ final class Crypto {
                 $plain = openssl_decrypt($ct, self::CIPHER, $key, OPENSSL_RAW_DATA, $info['prefix'] . pack('N', $index), $tag, $info['header'] . pack('N', $index) . ($final ? "\x01" : "\x00"));
                 if ($plain === false) {
                     throw new \RuntimeException(
-                        $index === 0
+                        esc_html($index === 0
                             ? __('Wrong passphrase, or the bundle was modified.', 'slice-backup')
-                            : __('The encrypted bundle is damaged or was modified.', 'slice-backup')
+                            : __('The encrypted bundle is damaged or was modified.', 'slice-backup'))
                     );
                 }
                 fwrite($out, $plain); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
@@ -229,7 +229,7 @@ final class Crypto {
         self::requireAvailable();
         $in = fopen($path, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$in) {
-            throw new \RuntimeException(__('Could not open the encrypted bundle.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not open the encrypted bundle.', 'slice-backup'));
         }
         $info = self::readHeader($in);
         fclose($in); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
@@ -240,7 +240,7 @@ final class Crypto {
             ? openssl_decrypt(substr($blob, 0, -16), self::CIPHER, $key, OPENSSL_RAW_DATA, $info['prefix'] . pack('N', self::META_INDEX), substr($blob, -16), 'meta')
             : false;
         if ($plain === false) {
-            throw new \RuntimeException(__('Wrong passphrase.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Wrong passphrase.', 'slice-backup'));
         }
         $data = json_decode($plain, true);
         return is_array($data) ? $data : array();
@@ -255,13 +255,13 @@ final class Crypto {
         $magic = fread($handle, 8); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
         $lenRaw = fread($handle, 4); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
         if ($magic !== self::MAGIC || !is_string($lenRaw) || strlen($lenRaw) !== 4) {
-            throw new \RuntimeException(__('This is not an encrypted Slice Backup bundle.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('This is not an encrypted Slice Backup bundle.', 'slice-backup'));
         }
         $len    = (int) unpack('N', $lenRaw)[1];
         $header = $len > 0 && $len < 65536 ? (string) fread($handle, $len) : ''; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
         $meta   = json_decode($header, true);
         if (!is_array($meta) || ($meta['cipher'] ?? '') !== self::CIPHER || (int) ($meta['v'] ?? 0) !== 1) {
-            throw new \RuntimeException(__('Unsupported encrypted bundle format.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Unsupported encrypted bundle format.', 'slice-backup'));
         }
         // phpcs:disable WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
         return array(

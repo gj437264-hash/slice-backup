@@ -252,13 +252,13 @@ class StreamingArchiver {
      */
     public static function archiveStep(array &$state, float $deadline, float $byteBudget): bool {
         if (!class_exists('ZipArchive')) {
-            throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
         }
 
         $zip   = new \ZipArchive();
         $flags = empty($state['started']) ? \ZipArchive::CREATE | \ZipArchive::OVERWRITE : 0;
         if ($zip->open((string) $state['archive'], $flags) !== true) {
-            throw new \RuntimeException(__('Could not open the bundle file for writing. Check free disk space and folder permissions.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not open the bundle file for writing. Check free disk space and folder permissions.', 'slice-backup'));
         }
 
         if (empty($state['started'])) {
@@ -272,7 +272,7 @@ class StreamingArchiver {
         $list = fopen((string) $state['list'], 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$list) {
             $zip->close();
-            throw new \RuntimeException(__('The file list for the bundle is missing.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('The file list for the bundle is missing.', 'slice-backup'));
         }
         fseek($list, (int) $state['pos']);
 
@@ -310,7 +310,7 @@ class StreamingArchiver {
         fclose($list); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         if (!$zip->close()) {
-            throw new \RuntimeException(__('Could not write to the bundle. The disk may be full.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not write to the bundle. The disk may be full.', 'slice-backup'));
         }
 
         return $eof;

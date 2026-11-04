@@ -68,12 +68,12 @@ final class Peer {
     public static function parseKey(string $key): array {
         $key = trim(preg_replace('/\s+/', '', $key) ?? '');
         if (strpos($key, self::PREFIX) !== 0) {
-            throw new \InvalidArgumentException(__('This is not a transfer key. Generate one on the other site under Settings > Site-to-site transfer.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('This is not a transfer key. Generate one on the other site under Settings > Site-to-site transfer.', 'slice-backup'));
         }
         $json = base64_decode(strtr(substr($key, strlen(self::PREFIX)), '-_', '+/'), true); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
         $data = is_string($json) ? json_decode($json, true) : null;
         if (!is_array($data) || empty($data['u']) || empty($data['k']) || empty($data['s']) || !wp_http_validate_url((string) $data['u']) && !preg_match('#^https?://#', (string) $data['u'])) {
-            throw new \InvalidArgumentException(__('The transfer key is damaged. Copy it again.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('The transfer key is damaged. Copy it again.', 'slice-backup'));
         }
         return array('url' => trailingslashit((string) $data['u']), 'id' => (string) $data['k'], 'secret' => (string) $data['s']);
     }
@@ -187,7 +187,7 @@ final class Peer {
             )
         );
         if (is_wp_error($response)) {
-            throw new PeerError(
+            throw PeerError::make(
                 /* translators: %s: error. */
                 sprintf(__('Could not reach the other site: %s', 'slice-backup'), $response->get_error_message()),
                 0
@@ -207,7 +207,7 @@ final class Peer {
         if ($code === 404 && $message === '') {
             $message = __('The other site does not have Slice Backup 1.2 or newer active, or its REST API is blocked.', 'slice-backup');
         }
-        throw new PeerError(
+        throw PeerError::make(
             /* translators: 1: HTTP status, 2: message. */
             sprintf(__('The other site refused the request (HTTP %1$d): %2$s', 'slice-backup'), $code, $message !== '' ? $message : wp_strip_all_tags(substr($text, 0, 200))),
             $code,

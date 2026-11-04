@@ -4,7 +4,7 @@
  * Plugin URI:        https://github.com/gj437264-hash/slice-backup
  * Description:       Back up, restore and migrate WordPress in small resumable steps — encrypted, scheduled, and sent to your own cloud storage, SFTP server, Dropbox or another site.
  * Version:           1.0.0-beta
- * Requires at least: 5.8
+ * Requires at least: 6.2
  * Requires PHP:      7.4
  * Author:            WP Migration Architecture Team
  * License:           GPL-2.0-or-later
@@ -29,7 +29,7 @@ define('SLICE_BACKUP_FILE', __FILE__);
 define('SLICE_BACKUP_PATH', plugin_dir_path(__FILE__));
 define('SLICE_BACKUP_URL', plugin_dir_url(__FILE__));
 define('SLICE_BACKUP_MIN_PHP', '7.4.0');
-define('SLICE_BACKUP_MIN_WP', '5.8');
+define('SLICE_BACKUP_MIN_WP', '6.2');
 
 // Stop early on old PHP instead of failing with a parse error in the class files.
 if (version_compare(PHP_VERSION, SLICE_BACKUP_MIN_PHP, '<')) {

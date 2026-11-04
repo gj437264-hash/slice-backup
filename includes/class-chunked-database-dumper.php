@@ -13,6 +13,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// A backup tool must read every table directly and uncached (SHOW CREATE TABLE is a read,
+// not a schema change). Identifiers go through %i placeholders.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+
 /**
  * Writes the WordPress tables to an SQL file, a few thousand rows at a time.
  */
@@ -53,7 +57,7 @@ class ChunkedDatabaseDumper {
                 // Keep going until every table is written.
             }
         } catch (\Throwable $e) {
-            @unlink($targetFile); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            wp_delete_file($targetFile);
             throw $e;
         }
         return $targetFile;
@@ -70,13 +74,13 @@ class ChunkedDatabaseDumper {
         $this->siteIds = DbUtil::siteIds();
         $tables        = $this->resolveTablesToDump($options);
         if (empty($tables)) {
-            throw new \RuntimeException(__('No WordPress tables were found to export.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('No WordPress tables were found to export.', 'slice-backup'));
         }
 
         $header = "-- Slice Backup SQL export\n-- Generated: " . gmdate('Y-m-d H:i:s') . " UTC\n"
             . "SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS = 0;\nSET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';\n\n";
         if (file_put_contents($targetFile, $header) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-            throw new \RuntimeException(__('Could not create the temporary database file. Check free disk space and folder permissions.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not create the temporary database file. Check free disk space and folder permissions.', 'slice-backup'));
         }
 
         return array(
@@ -102,7 +106,7 @@ class ChunkedDatabaseDumper {
 
         $handle = fopen((string) $state['file'], 'ab'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not write the temporary database file.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not write the temporary database file.', 'slice-backup'));
         }
 
         try {
@@ -135,7 +139,7 @@ class ChunkedDatabaseDumper {
      */
     private function write($handle, string $data): void {
         if (fwrite($handle, $data) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
-            throw new \RuntimeException(__('Writing the database export failed. The disk may be full.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Writing the database export failed. The disk may be full.', 'slice-backup'));
         }
     }
 
@@ -233,7 +237,7 @@ class ChunkedDatabaseDumper {
         global $wpdb;
 
         if (empty($state['created'])) {
-            $create = $wpdb->get_row('SHOW CREATE TABLE ' . DbUtil::ident($actual), ARRAY_N);
+            $create = $wpdb->get_row($wpdb->prepare('SHOW CREATE TABLE %i', $actual), ARRAY_N);
             if (!is_array($create) || !isset($create[1])) {
                 return true;
             }
@@ -262,31 +266,32 @@ class ChunkedDatabaseDumper {
                 return false;
             }
             if (function_exists('set_time_limit')) {
-                @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running step; each step is still time-budgeted.
             }
 
             $where = $filters;
             if ($pk !== null && $last !== null) {
                 $where[] = $pk['numeric']
-                    ? $wpdb->prepare(DbUtil::ident($pk['column']) . ' > %d', $last)
-                    : $wpdb->prepare(DbUtil::ident($pk['column']) . ' > %s', $last);
+                    ? $wpdb->prepare('%i > %d', $pk['column'], $last)
+                    : $wpdb->prepare('%i > %s', $pk['column'], $last);
             }
 
-            $sql = 'SELECT * FROM ' . DbUtil::ident($actual);
+            // Every piece is built with $wpdb->prepare(); the WHERE pieces are fixed strings or prepared above.
+            $sql = $wpdb->prepare('SELECT * FROM %i', $actual);
             if (!empty($where)) {
                 $sql .= ' WHERE ' . implode(' AND ', $where);
             }
             if ($pk !== null) {
-                $sql .= ' ORDER BY ' . DbUtil::ident($pk['column']) . ' ASC LIMIT ' . $this->chunkSize;
+                $sql .= $wpdb->prepare(' ORDER BY %i ASC LIMIT %d', $pk['column'], $this->chunkSize);
             } else {
-                $sql .= ' LIMIT ' . $this->chunkSize . ' OFFSET ' . $offset;
+                $sql .= $wpdb->prepare(' LIMIT %d OFFSET %d', $this->chunkSize, $offset);
             }
 
-            $rows = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Identifiers are quoted, values prepared above.
+            $rows = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
             if (empty($rows) && $wpdb->last_error !== '') {
                 throw new \RuntimeException(
-                    /* translators: 1: table name, 2: database error. */
-                    sprintf(__('Reading table %1$s failed: %2$s', 'slice-backup'), $actual, $wpdb->last_error)
+                    esc_html(/* translators: 1: table name, 2: database error. */
+                    sprintf(__('Reading table %1$s failed: %2$s', 'slice-backup'), $actual, $wpdb->last_error))
                 );
             }
             if (empty($rows)) {
@@ -445,7 +450,9 @@ class ChunkedDatabaseDumper {
 
         $value = (string) $value;
         if ($wpdb->dbh instanceof \mysqli) {
-            return "'" . mysqli_real_escape_string($wpdb->dbh, $value) . "'";
+            // esc_sql() uses the connection's charset-aware escaping. It also replaces "%" with a
+            // placeholder that is normally removed when a query runs; this text goes to a file instead.
+            return "'" . $wpdb->remove_placeholder_escape(esc_sql($value)) . "'";
         }
 
         return "'" . strtr(

@@ -56,7 +56,7 @@ final class Vendor {
         try {
             require_once SLICE_BACKUP_PATH . 'vendor/phpseclib/bootstrap.php';
         } catch (\Throwable $e) {
-            throw new \RuntimeException(__('SFTP is not available on this server: ', 'slice-backup') . $e->getMessage());
+            throw new \RuntimeException(esc_html__('SFTP is not available on this server: ', 'slice-backup') . esc_html($e->getMessage()));
         }
     }
 }

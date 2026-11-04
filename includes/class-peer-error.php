@@ -30,4 +30,13 @@ final class PeerError extends \RuntimeException {
         $this->status = $status;
         $this->data   = $data;
     }
+
+    /**
+     * Creates the error with an HTML-escaped message.
+     *
+     * @param array<string, mixed> $data
+     */
+    public static function make(string $message, int $status, array $data = array()): self {
+        return new self(esc_html($message), $status, $data);
+    }
 }

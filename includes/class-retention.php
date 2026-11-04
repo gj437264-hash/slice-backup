@@ -111,7 +111,7 @@ final class Retention {
                     $deleted[] = 'cloud:' . $name;
                 }
             } catch (\Throwable $e) {
-                update_site_option('slice_backup_retention_error', $e->getMessage());
+                update_site_option('slice_backup_retention_error', Plugin::errorText($e));
             }
         }
 

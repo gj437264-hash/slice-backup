@@ -31,7 +31,6 @@ final class Plugin {
     public static function init(): void {
         self::maybeUpgrade();
 
-        add_action('init', array(__CLASS__, 'loadTextdomain'));
         add_action(is_multisite() ? 'network_admin_menu' : 'admin_menu', array(__CLASS__, 'registerMenu'));
         add_action('admin_enqueue_scripts', array(__CLASS__, 'enqueueAssets'));
 
@@ -68,8 +67,15 @@ final class Plugin {
         wp_unschedule_hook(MigratorEngine::TICK_HOOK);
     }
 
-    public static function loadTextdomain(): void {
-        load_plugin_textdomain('slice-backup', false, dirname(plugin_basename(SLICE_BACKUP_FILE)) . '/languages');
+    /**
+     * Plain-text message of an exception.
+     *
+     * Exception messages are HTML-escaped when thrown. This turns them back into plain
+     * text for places that are not HTML: JSON for the admin screen (rendered with
+     * textContent), the REST API, WP-CLI, emails and stored job status.
+     */
+    public static function errorText(\Throwable $e): string {
+        return html_entity_decode($e->getMessage(), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
 
     /**
@@ -326,7 +332,7 @@ final class Plugin {
                     $s['encryption']['passphrase_sealed'] = '';
                 } elseif ($passphrase !== '') {
                     if (strlen($passphrase) < 8) {
-                        throw new \InvalidArgumentException(__('The passphrase must be at least 8 characters.', 'slice-backup'));
+                        throw new \InvalidArgumentException(esc_html__('The passphrase must be at least 8 characters.', 'slice-backup'));
                     }
                     $s['encryption']['passphrase_sealed'] = Crypto::seal($passphrase);
                 }
@@ -413,10 +419,10 @@ final class Plugin {
                     'webhook'      => $webhook,
                 );
                 if ($s['schedule']['enabled'] && $s['schedule']['encrypt'] && self::storedPassphrase() === '') {
-                    throw new \InvalidArgumentException(__('Save an encryption passphrase under Settings > Encryption before scheduling encrypted backups.', 'slice-backup'));
+                    throw new \InvalidArgumentException(esc_html__('Save an encryption passphrase under Settings > Encryption before scheduling encrypted backups.', 'slice-backup'));
                 }
                 if ($s['schedule']['enabled'] && $s['schedule']['upload'] && !Cloud::isConfigured()) {
-                    throw new \InvalidArgumentException(__('Set up cloud storage before scheduling uploads.', 'slice-backup'));
+                    throw new \InvalidArgumentException(esc_html__('Set up cloud storage before scheduling uploads.', 'slice-backup'));
                 }
                 break;
         }
@@ -520,7 +526,7 @@ final class Plugin {
             $storage = Storage::dir();
         } catch (\Throwable $e) {
             $storage      = '';
-            $storageError = $e->getMessage();
+            $storageError = self::errorText($e);
         }
 
         return array(

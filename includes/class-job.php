@@ -77,7 +77,7 @@ final class Job {
         $active = self::active();
         if ($active !== null) {
             if (!$active->isStalled()) {
-                throw new \RuntimeException(__('Another backup or restore is already running. Wait for it to finish or cancel it, then try again.', 'slice-backup'));
+                throw new \RuntimeException(esc_html__('Another backup or restore is already running. Wait for it to finish or cancel it, then try again.', 'slice-backup'));
             }
             $active->fail(__('Stopped because it stalled and a new job was started.', 'slice-backup'));
         }
@@ -97,7 +97,7 @@ final class Job {
         $handle = @fopen(self::activePointer(), 'x'); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
             Storage::removeDirectory($job->workDir());
-            throw new \RuntimeException(__('Another backup or restore is already running.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Another backup or restore is already running.', 'slice-backup'));
         }
         fwrite($handle, $job->id); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
         fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
@@ -117,7 +117,7 @@ final class Job {
         $id  = trim((string) file_get_contents($pointer)); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
         $job = $id !== '' ? self::load($id) : null;
         if ($job === null || $job->status !== 'running') {
-            @unlink($pointer); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            wp_delete_file($pointer);
             return null;
         }
         return $job;
@@ -195,7 +195,7 @@ final class Job {
     private function release(): void {
         $pointer = self::activePointer();
         if (is_file($pointer) && trim((string) file_get_contents($pointer)) === $this->id) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-            @unlink($pointer); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            wp_delete_file($pointer);
         }
     }
 

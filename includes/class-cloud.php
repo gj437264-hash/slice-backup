@@ -29,7 +29,7 @@ final class Cloud {
             's3'      => array(
                 'kind'      => 's3',
                 'label'     => 'Amazon S3',
-                'endpoint'  => 'https://s3.{region}.amazonaws.com',
+                'endpoint'  => 'https://s3.{region}.amazonaws.com', // phpcs:ignore PluginCheck.CodeAnalysis.Offloading.OffloadedContent -- API endpoint / help link, not loaded content.
                 'region'    => 'us-east-1',
                 'pathStyle' => false,
                 'fields'    => array('region'),
@@ -47,9 +47,9 @@ final class Cloud {
                 'pathStyle' => true,
                 'fields'    => array('account'),
                 'links'     => array(
-                    'signup'  => 'https://www.cloudflare.com/developer-platform/products/r2/',
-                    'pricing' => 'https://developers.cloudflare.com/r2/pricing/',
-                    'keys'    => 'https://developers.cloudflare.com/r2/api/tokens/',
+                    'signup'  => 'https://www.cloudflare.com/developer-platform/products/r2/', // phpcs:ignore PluginCheck.CodeAnalysis.Offloading.OffloadedContent -- API endpoint / help link, not loaded content.
+                    'pricing' => 'https://developers.cloudflare.com/r2/pricing/', // phpcs:ignore PluginCheck.CodeAnalysis.Offloading.OffloadedContent -- API endpoint / help link, not loaded content.
+                    'keys'    => 'https://developers.cloudflare.com/r2/api/tokens/', // phpcs:ignore PluginCheck.CodeAnalysis.Offloading.OffloadedContent -- API endpoint / help link, not loaded content.
                 ),
             ),
             'gcs'     => array(
@@ -186,7 +186,7 @@ final class Cloud {
             case 'dropbox':
                 return new DropboxDestination($c);
         }
-        throw new \InvalidArgumentException(__('Choose a storage provider.', 'slice-backup'));
+        throw new \InvalidArgumentException(esc_html__('Choose a storage provider.', 'slice-backup'));
     }
 
     /**
@@ -241,7 +241,7 @@ final class Cloud {
 
     public static function delete(string $filename): void {
         if (!Storage::isBundleName($filename)) {
-            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'slice-backup'));
+            throw new \InvalidArgumentException(esc_html__('Invalid bundle file name.', 'slice-backup'));
         }
         self::destination()->delete($filename);
     }
@@ -278,7 +278,7 @@ final class Cloud {
      */
     public static function appendChunk(string $target, string $data): void {
         if (file_put_contents($target, $data, FILE_APPEND) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-            throw new \RuntimeException(__('Could not save the downloaded data. The disk may be full.', 'slice-backup'));
+            throw new \RuntimeException(esc_html__('Could not save the downloaded data. The disk may be full.', 'slice-backup'));
         }
     }
 

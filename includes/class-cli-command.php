@@ -109,11 +109,11 @@ final class CliCommand {
         try {
             $job    = MigratorEngine::runToCompletion(MigratorEngine::startExport($options, 'cli'), array($this, 'progress'));
             if ($job->status !== 'done') {
-                throw new \RuntimeException($job->error);
+                throw new \RuntimeException(esc_html($job->error));
             }
             $result = (array) $job->data['result'];
         } catch (\Throwable $e) {
-            \WP_CLI::error($e->getMessage());
+            \WP_CLI::error(Plugin::errorText($e));
             return;
         }
 
@@ -185,11 +185,11 @@ final class CliCommand {
         try {
             $job = MigratorEngine::runToCompletion(MigratorEngine::startRestore($name, $options, 'cli'), array($this, 'progress'));
             if ($job->status !== 'done') {
-                throw new \RuntimeException($job->error);
+                throw new \RuntimeException(esc_html($job->error));
             }
             $result = (array) $job->data['result'];
         } catch (\Throwable $e) {
-            \WP_CLI::error($e->getMessage());
+            \WP_CLI::error(Plugin::errorText($e));
             return;
         }
 
@@ -268,7 +268,7 @@ final class CliCommand {
         try {
             Storage::delete((string) $args[0]);
         } catch (\Throwable $e) {
-            \WP_CLI::error($e->getMessage());
+            \WP_CLI::error(Plugin::errorText($e));
         }
         \WP_CLI::success('Deleted.');
     }
@@ -302,10 +302,10 @@ final class CliCommand {
         try {
             $job = MigratorEngine::runToCompletion(MigratorEngine::startPull((string) $args[0], array('export_type' => (string) ($assocArgs['preset'] ?? 'full')), 'cli'), array($this, 'progress'));
             if ($job->status !== 'done') {
-                throw new \RuntimeException($job->error);
+                throw new \RuntimeException(esc_html($job->error));
             }
         } catch (\Throwable $e) {
-            \WP_CLI::error($e->getMessage());
+            \WP_CLI::error(Plugin::errorText($e));
             return;
         }
         \WP_CLI::success(sprintf('Fetched %s. Restore it with: wp slice-backup import %s', $job->data['result']['bundleFile'], $job->data['result']['bundleFile']));
@@ -323,7 +323,7 @@ final class CliCommand {
         try {
             \WP_CLI::success(Cloud::test(Cloud::config())['message']);
         } catch (\Throwable $e) {
-            \WP_CLI::error($e->getMessage());
+            \WP_CLI::error(Plugin::errorText($e));
         }
     }
 

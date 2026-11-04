@@ -13,6 +13,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// After a restore, the active plugin lists of the just-imported tables must be edited
+// directly (the object cache still holds the old site's values). Identifiers use %i.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
 /**
  * Extracts archives defensively and finds plugins/themes that would crash on this PHP version.
  *
@@ -52,8 +56,8 @@ class CompatibilityInspector {
                 SecuritySanitizer::assertPathInJail($name, $targetDir);
             } catch (\Throwable $e) {
                 throw new \RuntimeException(
-                    /* translators: %s: archive entry name. */
-                    sprintf(__('Unsafe archive: the entry "%s" points outside the extraction folder. Restore stopped.', 'slice-backup'), $name)
+                    esc_html(/* translators: %s: archive entry name. */
+                    sprintf(__('Unsafe archive: the entry "%s" points outside the extraction folder. Restore stopped.', 'slice-backup'), $name))
                 );
             }
         }
@@ -61,7 +65,7 @@ class CompatibilityInspector {
         $skipped = array();
         for ($i = 0; $i < $count; $i++) {
             if ($i % 200 === 0 && function_exists('set_time_limit')) {
-                @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running step; each step is still time-budgeted.
             }
 
             $name = $zip->getNameIndex($i);
@@ -99,14 +103,14 @@ class CompatibilityInspector {
                 if ($chunk !== '' && fwrite($out, $chunk) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
                     fclose($in);  // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                     fclose($out); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-                    throw new \RuntimeException(__('Extraction failed while writing to disk. The disk may be full.', 'slice-backup'));
+                    throw new \RuntimeException(esc_html__('Extraction failed while writing to disk. The disk may be full.', 'slice-backup'));
                 }
             }
             fclose($in);  // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             fclose($out); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
             if (!$ok) {
-                @unlink($path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                wp_delete_file($path);
                 $skipped[] = $name;
             }
         }
@@ -129,8 +133,8 @@ class CompatibilityInspector {
         $code = $zip->open($zipPath);
         if ($code !== true) {
             throw new \RuntimeException(
-                /* translators: %s: zip error code. */
-                sprintf(__('Could not open the bundle (zip error %s). The file may be incomplete or is not a zip archive.', 'slice-backup'), (string) $code)
+                esc_html(/* translators: %s: zip error code. */
+                sprintf(__('Could not open the bundle (zip error %s). The file may be incomplete or is not a zip archive.', 'slice-backup'), (string) $code))
             );
         }
 
@@ -149,8 +153,8 @@ class CompatibilityInspector {
                         SecuritySanitizer::assertPathInJail($name, $targetDir);
                     } catch (\Throwable $e) {
                         throw new \RuntimeException(
-                            /* translators: %s: archive entry name. */
-                            sprintf(__('Unsafe archive: the entry "%s" points outside the extraction folder. Restore stopped.', 'slice-backup'), $name)
+                            esc_html(/* translators: %s: archive entry name. */
+                            sprintf(__('Unsafe archive: the entry "%s" points outside the extraction folder. Restore stopped.', 'slice-backup'), $name))
                         );
                     }
                 }
@@ -195,13 +199,13 @@ class CompatibilityInspector {
                     if ($chunk !== '' && fwrite($out, $chunk) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
                         fclose($in);  // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                         fclose($out); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-                        throw new \RuntimeException(__('Extraction failed while writing to disk. The disk may be full.', 'slice-backup'));
+                        throw new \RuntimeException(esc_html__('Extraction failed while writing to disk. The disk may be full.', 'slice-backup'));
                     }
                 }
                 fclose($in);  // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 fclose($out); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 if (!$ok) {
-                    @unlink($path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                    wp_delete_file($path);
                     $state['skipped'][] = $name;
                 }
             }
@@ -309,7 +313,6 @@ class CompatibilityInspector {
             foreach ($plugins as $slug => $index) {
                 if (in_array($slug, $deactivated, true)) {
                     $report['items'][$index]['actionTaken'] = __('Deactivated so the site can load. Its files and settings were restored unchanged.', 'slice-backup');
-                    $this->writeNotice($slug, (string) $report['items'][$index]['issue']);
                 } else {
                     $report['items'][$index]['actionTaken'] = __('Restored. It was not active, so nothing was changed.', 'slice-backup');
                 }
@@ -655,7 +658,7 @@ class CompatibilityInspector {
         $deactivated = array();
 
         foreach (DbUtil::optionsTables() as $table) {
-            $row = $wpdb->get_row($wpdb->prepare('SELECT option_id, option_value FROM ' . DbUtil::ident($table) . ' WHERE option_name = %s', 'active_plugins')); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+            $row = $wpdb->get_row($wpdb->prepare('SELECT option_id, option_value FROM %i WHERE option_name = %s', $table, 'active_plugins'));
             if (!$row) {
                 continue;
             }
@@ -680,7 +683,7 @@ class CompatibilityInspector {
 
         if (is_multisite()) {
             $sitemeta = $wpdb->base_prefix . 'sitemeta';
-            $row      = $wpdb->get_row($wpdb->prepare('SELECT meta_id, meta_value FROM ' . DbUtil::ident($sitemeta) . ' WHERE meta_key = %s', 'active_sitewide_plugins')); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+            $row      = $wpdb->get_row($wpdb->prepare('SELECT meta_id, meta_value FROM %i WHERE meta_key = %s', $sitemeta, 'active_sitewide_plugins'));
             if ($row) {
                 $network = @unserialize((string) $row->meta_value, array('allowed_classes' => false)); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize
                 if (is_array($network)) {
@@ -702,21 +705,6 @@ class CompatibilityInspector {
 
         wp_cache_flush();
         return array_values(array_unique($deactivated));
-    }
-
-    private function writeNotice(string $slug, string $issue): void {
-        $folder = WP_PLUGIN_DIR . '/' . $slug;
-        if (!is_dir($folder)) {
-            return;
-        }
-        $text = "Slice Backup - plugin deactivated during restore\n"
-            . "=======================================================\n"
-            . "Plugin: {$slug}\n"
-            . 'Server PHP version: ' . PHP_VERSION . "\n"
-            . "Reason: {$issue}\n\n"
-            . "The plugin files and settings were restored unchanged. Update the plugin to a\n"
-            . "version that supports this PHP version, then reactivate it under Plugins.\n";
-        file_put_contents($folder . '/MIGRATOR_SAFETY_NOTICE.txt', $text);
     }
 
     /**

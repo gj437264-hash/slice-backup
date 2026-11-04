@@ -13,6 +13,9 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// Diagnostics read live server values (max_allowed_packet, table sizes); caching them would be wrong.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
 /**
  * Environment checks shown on the System tab.
  */
@@ -120,7 +123,7 @@ final class SystemCheck {
                 );
             }
         } catch (\Throwable $e) {
-            $rows[] = self::row('storage', __('Backup folder', 'slice-backup'), __('Unavailable', 'slice-backup'), 'fail', $e->getMessage());
+            $rows[] = self::row('storage', __('Backup folder', 'slice-backup'), __('Unavailable', 'slice-backup'), 'fail', Plugin::errorText($e));
         }
 
         $memory      = (string) ini_get('memory_limit');
@@ -203,7 +206,7 @@ final class SystemCheck {
         try {
             $dir = Storage::dir();
         } catch (\Throwable $e) {
-            return self::row('probe', $label, __('Unknown', 'slice-backup'), 'warn', $e->getMessage());
+            return self::row('probe', $label, __('Unknown', 'slice-backup'), 'warn', Plugin::errorText($e));
         }
 
         $name  = 'probe-' . strtolower(wp_generate_password(16, false)) . '.txt';
@@ -218,7 +221,7 @@ final class SystemCheck {
                 'sslverify'   => (bool) apply_filters('https_local_ssl_verify', false), // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Core filter.
             )
         );
-        @unlink($dir . '/' . $name); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+        wp_delete_file($dir . '/' . $name);
 
         if (is_wp_error($response)) {
             $row = self::row(

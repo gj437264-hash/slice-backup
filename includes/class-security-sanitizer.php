@@ -24,14 +24,14 @@ final class SecuritySanitizer {
      */
     public static function assertPathInJail(string $relativePath, string $baseDirectory): string {
         if (strpos($relativePath, "\0") !== false) {
-            throw new \RuntimeException(sprintf('Null byte in archive entry: %s', $relativePath));
+            throw new \RuntimeException(esc_html(sprintf('Null byte in archive entry: %s', $relativePath)));
         }
 
         $clean = str_replace('\\', '/', $relativePath);
 
         // Absolute paths and Windows drive letters / stream wrappers are never valid entries.
         if (preg_match('#^(/|[A-Za-z]:|[A-Za-z][A-Za-z0-9+.-]*://)#', $clean)) {
-            throw new \RuntimeException(sprintf('Absolute path in archive entry: %s', $relativePath));
+            throw new \RuntimeException(esc_html(sprintf('Absolute path in archive entry: %s', $relativePath)));
         }
 
         $parts = array();
@@ -40,7 +40,7 @@ final class SecuritySanitizer {
                 continue;
             }
             if ($part === '..') {
-                throw new \RuntimeException(sprintf('Directory traversal in archive entry: %s', $relativePath));
+                throw new \RuntimeException(esc_html(sprintf('Directory traversal in archive entry: %s', $relativePath)));
             }
             $parts[] = $part;
         }
@@ -52,7 +52,7 @@ final class SecuritySanitizer {
         $haystack    = $isWindows ? strtolower($target) : $target;
         $needle      = $isWindows ? strtolower($base . '/') : $base . '/';
         if (strpos($haystack . '/', $needle) !== 0) {
-            throw new \RuntimeException(sprintf('Archive entry escapes the extraction folder: %s', $relativePath));
+            throw new \RuntimeException(esc_html(sprintf('Archive entry escapes the extraction folder: %s', $relativePath)));
         }
 
         return $target;
