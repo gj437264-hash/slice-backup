@@ -2,22 +2,22 @@
 /**
  * REST API for headless automation (authenticate with Application Passwords).
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
 /**
- * Routes under /wp-json/wp-bundle-migrator/v1/.
+ * Routes under /wp-json/slice-backup/v1/.
  */
 final class RestController {
-    public const NAMESPACE_V1 = 'wp-bundle-migrator/v1';
+    public const NAMESPACE_V1 = 'slice-backup/v1';
 
     public static function init(): void {
         add_action('rest_api_init', array(__CLASS__, 'registerRoutes'));
@@ -139,7 +139,7 @@ final class RestController {
         if (Plugin::currentUserCan()) {
             return true;
         }
-        return new \WP_Error('rest_forbidden', __('You do not have permission to do this.', 'wp-bundle-migrator'), array('status' => rest_authorization_required_code()));
+        return new \WP_Error('rest_forbidden', __('You do not have permission to do this.', 'slice-backup'), array('status' => rest_authorization_required_code()));
     }
 
     /**
@@ -154,7 +154,7 @@ final class RestController {
     }
 
     private static function error(\Throwable $e): \WP_Error {
-        return new \WP_Error('wpbm_error', $e->getMessage(), array('status' => $e instanceof \InvalidArgumentException ? 400 : 500));
+        return new \WP_Error('slice_backup_error', $e->getMessage(), array('status' => $e instanceof \InvalidArgumentException ? 400 : 500));
     }
 
     /**
@@ -230,7 +230,7 @@ final class RestController {
             array(
                 'site'        => (string) get_option('siteurl'),
                 'name'        => (string) get_bloginfo('name'),
-                'version'     => WPBM_VERSION,
+                'version'     => SLICE_BACKUP_VERSION,
                 'wp'          => get_bloginfo('version'),
                 'php'         => PHP_VERSION,
                 'multisite'   => is_multisite(),
@@ -258,7 +258,7 @@ final class RestController {
                 (string) $request->get_body()
             );
             if (isset($result['expected'])) {
-                return new \WP_Error('wpbm_offset', 'offset_mismatch', array('status' => 409, 'expected' => $result['expected']));
+                return new \WP_Error('slice_backup_offset', 'offset_mismatch', array('status' => 409, 'expected' => $result['expected']));
             }
             return rest_ensure_response($result);
         } catch (\Throwable $e) {
@@ -317,7 +317,7 @@ final class RestController {
         $params = (array) $request->get_json_params();
         $job    = Job::load(sanitize_text_field((string) ($params['id'] ?? '')));
         if ($job === null || !$job->checkToken((string) ($params['token'] ?? ''))) {
-            return new \WP_Error('wpbm_peer_denied', __('Unknown or expired job.', 'wp-bundle-migrator'), array('status' => 403));
+            return new \WP_Error('slice_backup_peer_denied', __('Unknown or expired job.', 'slice-backup'), array('status' => 403));
         }
         if ($job->status === 'running') {
             $job = MigratorEngine::tick($job, min(25.0, (float) Plugin::settings()['step_seconds']));
@@ -338,7 +338,7 @@ final class RestController {
         }
         $response = new \WP_REST_Response($data, 200);
         $response->header('Content-Type', 'application/octet-stream');
-        $response->header('X-WPBM-Raw', '1');
+        $response->header('X-Slice-Backup-Raw', '1');
         return $response;
     }
 
@@ -353,7 +353,7 @@ final class RestController {
             return (bool) $served;
         }
         $headers = $result->get_headers();
-        if (empty($headers['X-WPBM-Raw']) || !is_string($result->get_data())) {
+        if (empty($headers['X-Slice-Backup-Raw']) || !is_string($result->get_data())) {
             return (bool) $served;
         }
         header('Content-Length: ' . strlen($result->get_data()));
@@ -368,7 +368,7 @@ final class RestController {
         return rest_ensure_response(
             array(
                 'status'       => 'ready',
-                'version'      => WPBM_VERSION,
+                'version'      => SLICE_BACKUP_VERSION,
                 'php_version'  => PHP_VERSION,
                 'is_multisite' => is_multisite(),
                 'checks'       => SystemCheck::run(),

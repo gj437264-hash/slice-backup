@@ -2,12 +2,12 @@
 /**
  * Error returned by the other site during a site-to-site transfer.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;

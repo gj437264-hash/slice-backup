@@ -6,12 +6,12 @@
  * The next request (from the browser, a loopback request or WP-Cron) continues where
  * it left off, so large sites are not stopped by PHP or proxy time limits.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -39,7 +39,7 @@ class MigratorEngine {
         'media_only'   => 'media',
     );
 
-    public const TICK_HOOK = 'wpbm_job_tick';
+    public const TICK_HOOK = 'slice_backup_job_tick';
 
     /**
      * @param mixed $value
@@ -84,32 +84,32 @@ class MigratorEngine {
     public static function startExport(array $options, string $origin = 'manual'): Job {
         $components = self::resolveComponents($options);
         if (!in_array(true, $components, true)) {
-            throw new \InvalidArgumentException(__('Nothing to export. Select at least one item to include.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Nothing to export. Select at least one item to include.', 'slice-backup'));
         }
 
         $mode      = (is_multisite() && ($options['multisite_mode'] ?? '') === 'subsite') ? 'subsite' : 'entire_network';
         $subsiteId = $mode === 'subsite' ? absint($options['subsite_id'] ?? 0) : 0;
         if ($mode === 'subsite' && ($subsiteId < 1 || !get_site($subsiteId))) {
-            throw new \InvalidArgumentException(__('Choose a valid network site to export.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Choose a valid network site to export.', 'slice-backup'));
         }
 
         $encrypt    = self::truthy($options['encrypt'] ?? false);
         $passphrase = (string) ($options['passphrase'] ?? '');
         if ($encrypt) {
             if (!Crypto::available()) {
-                throw new \InvalidArgumentException(__('Encryption needs the PHP OpenSSL extension.', 'wp-bundle-migrator'));
+                throw new \InvalidArgumentException(__('Encryption needs the PHP OpenSSL extension.', 'slice-backup'));
             }
             if ($passphrase === '') {
                 $passphrase = Plugin::storedPassphrase();
             }
             if (strlen($passphrase) < 8) {
-                throw new \InvalidArgumentException(__('Enter an encryption passphrase of at least 8 characters, or save one under Settings.', 'wp-bundle-migrator'));
+                throw new \InvalidArgumentException(__('Enter an encryption passphrase of at least 8 characters, or save one under Settings.', 'slice-backup'));
             }
         }
 
         $upload = self::truthy($options['upload'] ?? false);
         if ($upload && !Cloud::isConfigured()) {
-            throw new \InvalidArgumentException(__('Cloud storage is not set up. Configure it under Settings > Cloud storage.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Cloud storage is not set up. Configure it under Settings > Cloud storage.', 'slice-backup'));
         }
 
         // Site-to-site push: check the key and the other site before starting.
@@ -118,7 +118,7 @@ class MigratorEngine {
         if ($pushKey !== '') {
             $pushInfo = Peer::ping(Peer::parseKey($pushKey));
             if (!empty($pushInfo['busy'])) {
-                throw new \RuntimeException(__('The other site is running a backup or restore right now. Try again when it has finished.', 'wp-bundle-migrator'));
+                throw new \RuntimeException(__('The other site is running a backup or restore right now. Try again when it has finished.', 'slice-backup'));
             }
         }
         $pushRestore = $pushKey !== '' && self::truthy($options['push_restore'] ?? false);
@@ -175,7 +175,7 @@ class MigratorEngine {
 
         $name = Storage::newBundleName(self::fileLabel($components, $context), $origin === 'schedule');
         if ($encrypt) {
-            $name = substr($name, 0, -4) . '.wpbundle';
+            $name = substr($name, 0, -4) . '.slicebk';
         }
         $job->data = array(
             'name'     => $name,
@@ -184,11 +184,11 @@ class MigratorEngine {
             'zip'      => $job->workDir() . '/bundle.zip',
             'manifest' => StreamingArchiver::manifest($components, $context, $components['db'], $origin),
         );
-        $job->progress = array('label' => __('Starting…', 'wp-bundle-migrator'), 'percent' => 0.0, 'detail' => '');
+        $job->progress = array('label' => __('Starting…', 'slice-backup'), 'percent' => 0.0, 'detail' => '');
         $job->save();
 
         /** Fires when an export job starts. */
-        do_action('wpbm_before_export', $options, $components);
+        do_action('slice_backup_before_export', $options, $components);
 
         return $job;
     }
@@ -213,7 +213,7 @@ class MigratorEngine {
             $sealed = Crypto::seal($passphrase);
         }
         if (!class_exists('ZipArchive')) {
-            throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
         }
 
         if (isset($options['restore_core']) && !isset($options['restore_wp_core'])) {
@@ -224,7 +224,7 @@ class MigratorEngine {
             $want[$key] = self::truthy($options['restore_' . $key] ?? in_array($key, array('db', 'uploads'), true));
         }
         if (!in_array(true, $want, true)) {
-            throw new \InvalidArgumentException(__('Select at least one item to restore.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Select at least one item to restore.', 'slice-backup'));
         }
 
         $steps = array();
@@ -264,7 +264,7 @@ class MigratorEngine {
         $job->save();
 
         /** Fires when a restore job starts. */
-        do_action('wpbm_before_restore', $filename, $options);
+        do_action('slice_backup_before_restore', $filename, $options);
 
         return $job;
     }
@@ -277,7 +277,7 @@ class MigratorEngine {
     public static function startUpload(string $filename, string $origin = 'manual'): Job {
         $path = Storage::path($filename);
         if (!Cloud::isConfigured()) {
-            throw new \InvalidArgumentException(__('Cloud storage is not set up.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Cloud storage is not set up.', 'slice-backup'));
         }
         $job       = Job::create('upload', array('upload', 'finalize'), array('filename' => $filename), $origin);
         $job->data = array('name' => $filename, 'file' => $path);
@@ -294,7 +294,7 @@ class MigratorEngine {
     public static function startPull(string $key, array $options, string $origin = 'manual'): Job {
         $info = Peer::ping(Peer::parseKey($key));
         if (!empty($info['busy'])) {
-            throw new \RuntimeException(__('The other site is running a backup or restore right now. Try again when it has finished.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('The other site is running a backup or restore right now. Try again when it has finished.', 'slice-backup'));
         }
         $preset = sanitize_key((string) ($options['export_type'] ?? 'full'));
         $job    = Job::create(
@@ -335,7 +335,7 @@ class MigratorEngine {
             if ($status !== 'running') {
                 throw new \RuntimeException(
                     /* translators: %s: error message from the other site. */
-                    sprintf(__('The other site reported: %s', 'wp-bundle-migrator'), (string) ($remote['error'] ?? $status))
+                    sprintf(__('The other site reported: %s', 'slice-backup'), (string) ($remote['error'] ?? $status))
                 );
             }
         }
@@ -349,13 +349,13 @@ class MigratorEngine {
      */
     public static function startDownload(string $filename, string $origin = 'manual'): Job {
         if (!Storage::isBundleName($filename)) {
-            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'slice-backup'));
         }
         if (is_file(Storage::dir() . '/' . $filename)) {
-            throw new \InvalidArgumentException(__('This bundle is already on the server.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('This bundle is already on the server.', 'slice-backup'));
         }
         if (!Cloud::isConfigured()) {
-            throw new \InvalidArgumentException(__('Cloud storage is not set up.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Cloud storage is not set up.', 'slice-backup'));
         }
         $job       = Job::create('download', array('download', 'finalize'), array('filename' => $filename), $origin);
         $job->data = array('name' => $filename, 'part' => $job->workDir() . '/download.part');
@@ -463,7 +463,7 @@ class MigratorEngine {
                 'blocking'  => false,
                 'sslverify' => (bool) apply_filters('https_local_ssl_verify', false), // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Core filter.
                 'body'      => array(
-                    'action' => 'wpbm_job_tick',
+                    'action' => 'slice_backup_job_tick',
                     'job'    => $job->id,
                     'token'  => $job->token,
                     'source' => 'loopback',
@@ -592,10 +592,10 @@ class MigratorEngine {
                 $total = max(1, count($state['tables']));
                 self::setProgress(
                     $job,
-                    __('Exporting the database', 'wp-bundle-migrator'),
+                    __('Exporting the database', 'slice-backup'),
                     $state['ti'] / $total,
                     /* translators: 1: tables done, 2: total tables, 3: rows. */
-                    sprintf(__('%1$d of %2$d tables, %3$s rows', 'wp-bundle-migrator'), min($state['ti'], $total), $total, number_format_i18n((int) $state['rows']))
+                    sprintf(__('%1$d of %2$d tables, %3$s rows', 'slice-backup'), min($state['ti'], $total), $total, number_format_i18n((int) $state['rows']))
                 );
                 return $done;
 
@@ -610,10 +610,10 @@ class MigratorEngine {
                 self::remember($file, $state);
                 self::setProgress(
                     $job,
-                    __('Finding files', 'wp-bundle-migrator'),
+                    __('Finding files', 'slice-backup'),
                     $done ? 1.0 : 0.5,
                     /* translators: 1: number of files, 2: size. */
-                    sprintf(__('%1$s files, %2$s', 'wp-bundle-migrator'), number_format_i18n((int) $state['files']), size_format((float) $state['bytes'], 1))
+                    sprintf(__('%1$s files, %2$s', 'slice-backup'), number_format_i18n((int) $state['files']), size_format((float) $state['bytes'], 1))
                 );
                 if ($done) {
                     $job->data['files'] = (int) $state['files'];
@@ -631,10 +631,10 @@ class MigratorEngine {
                 $fraction   = (float) $state['totalBytes'] > 0 ? (float) $state['addedBytes'] / (float) $state['totalBytes'] : ($done ? 1.0 : 0.0);
                 self::setProgress(
                     $job,
-                    __('Compressing files', 'wp-bundle-migrator'),
+                    __('Compressing files', 'slice-backup'),
                     $fraction,
                     /* translators: 1: files added, 2: total files. */
-                    sprintf(__('%1$s of %2$s files', 'wp-bundle-migrator'), number_format_i18n((int) $state['added']), number_format_i18n((int) $state['total']))
+                    sprintf(__('%1$s of %2$s files', 'slice-backup'), number_format_i18n((int) $state['added']), number_format_i18n((int) $state['total']))
                 );
                 if ($done) {
                     @unlink((string) $job->data['list']); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
@@ -645,14 +645,14 @@ class MigratorEngine {
 
             case 'encrypt':
                 $source = (string) $job->data['zip'];
-                $target = $job->workDir() . '/bundle.wpbundle';
+                $target = $job->workDir() . '/bundle.slicebk';
                 if (!empty($state)) {
                     self::rewind($target, $state);
                 }
                 $done = Crypto::encryptStep($source, $target, Crypto::open((string) $job->options['passphrase']), (array) $job->data['manifest'], $state, $deadline);
                 self::remember($target, $state);
                 $size = max(1.0, Storage::filesize($source));
-                self::setProgress($job, __('Encrypting', 'wp-bundle-migrator'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
+                self::setProgress($job, __('Encrypting', 'slice-backup'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
                 if ($done) {
                     @unlink($source); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
                     $job->data['file'] = $target;
@@ -662,17 +662,17 @@ class MigratorEngine {
             case 'store':
                 $final = Storage::dir() . '/' . $job->data['name'];
                 if (!@rename((string) $job->data['file'], $final)) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename
-                    throw new \RuntimeException(__('Could not move the finished bundle into the backup folder.', 'wp-bundle-migrator'));
+                    throw new \RuntimeException(__('Could not move the finished bundle into the backup folder.', 'slice-backup'));
                 }
                 $job->data['file'] = $final;
-                self::setProgress($job, __('Saved', 'wp-bundle-migrator'), 1.0);
+                self::setProgress($job, __('Saved', 'slice-backup'), 1.0);
                 return true;
 
             case 'upload':
                 $file = (string) $job->data['file'];
                 $done = Cloud::uploadStep($file, (string) $job->data['name'], $state, $deadline);
                 $size = max(1.0, Storage::filesize($file));
-                self::setProgress($job, __('Uploading to cloud storage', 'wp-bundle-migrator'), (float) ($state['offset'] ?? 0) / $size, size_format((float) ($state['offset'] ?? 0), 1) . ' / ' . size_format($size, 1));
+                self::setProgress($job, __('Uploading to cloud storage', 'slice-backup'), (float) ($state['offset'] ?? 0) / $size, size_format((float) ($state['offset'] ?? 0), 1) . ' / ' . size_format($size, 1));
                 if ($done) {
                     $job->data['uploaded'] = true;
                     $state                 = array();
@@ -696,7 +696,7 @@ class MigratorEngine {
                     }
                     $state = Peer::request($key, 'restore', (string) wp_json_encode($body))['json'];
                 }
-                $result = self::followRemote($job, $key, $state, $deadline, __('Restoring on the other site', 'wp-bundle-migrator'));
+                $result = self::followRemote($job, $key, $state, $deadline, __('Restoring on the other site', 'slice-backup'));
                 if ($result === null) {
                     return false;
                 }
@@ -708,12 +708,12 @@ class MigratorEngine {
                 if (empty($state)) {
                     $state = Peer::request($key, 'export', (string) wp_json_encode(array('export_type' => $job->options['export_type'])))['json'];
                 }
-                $result = self::followRemote($job, $key, $state, $deadline, __('Creating the bundle on the other site', 'wp-bundle-migrator'));
+                $result = self::followRemote($job, $key, $state, $deadline, __('Creating the bundle on the other site', 'slice-backup'));
                 if ($result === null) {
                     return false;
                 }
                 if (empty($result['bundleFile']) || !Storage::isBundleName((string) $result['bundleFile'])) {
-                    throw new \RuntimeException(__('The other site did not report a bundle.', 'wp-bundle-migrator'));
+                    throw new \RuntimeException(__('The other site did not report a bundle.', 'slice-backup'));
                 }
                 $job->data['name']       = (string) $result['bundleFile'];
                 $job->data['remoteSize'] = (float) ($result['sizeBytes'] ?? 0);
@@ -741,14 +741,14 @@ class MigratorEngine {
                         180
                     )['body'];
                     if ($data === '') {
-                        throw new \RuntimeException(__('The other site sent an empty response.', 'wp-bundle-migrator'));
+                        throw new \RuntimeException(__('The other site sent an empty response.', 'slice-backup'));
                     }
                     Cloud::appendChunk($part, $data);
                     $state['offset'] = (float) $state['offset'] + strlen($data);
                 }
                 self::remember($part, $state);
                 $size = max(1.0, (float) $state['size']);
-                self::setProgress($job, __('Downloading from the other site', 'wp-bundle-migrator'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
+                self::setProgress($job, __('Downloading from the other site', 'slice-backup'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
                 return (float) $state['offset'] >= (float) $state['size'];
 
             case 'download':
@@ -760,7 +760,7 @@ class MigratorEngine {
                 $done = Cloud::downloadStep((string) $job->data['name'], $part, $state, $deadline);
                 self::remember($part, $state);
                 $size = max(1.0, (float) ($state['size'] ?? 1));
-                self::setProgress($job, __('Downloading from cloud storage', 'wp-bundle-migrator'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
+                self::setProgress($job, __('Downloading from cloud storage', 'slice-backup'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
                 return $done;
 
             /* Restore ----------------------------------------------------- */
@@ -773,7 +773,7 @@ class MigratorEngine {
                 $done = Crypto::decryptStep($source, $target, Crypto::open((string) $job->options['passphrase']), $state, $deadline);
                 self::remember($target, $state);
                 $size = max(1.0, Storage::filesize($source));
-                self::setProgress($job, __('Decrypting', 'wp-bundle-migrator'), (float) $state['offset'] / $size);
+                self::setProgress($job, __('Decrypting', 'slice-backup'), (float) $state['offset'] / $size);
                 return $done;
 
             case 'extract':
@@ -782,10 +782,10 @@ class MigratorEngine {
                 $total     = max(1, (int) ($state['total'] ?? 1));
                 self::setProgress(
                     $job,
-                    __('Unpacking the bundle', 'wp-bundle-migrator'),
+                    __('Unpacking the bundle', 'slice-backup'),
                     (int) $state['index'] / $total,
                     /* translators: 1: entries done, 2: total entries. */
-                    sprintf(__('%1$s of %2$s files', 'wp-bundle-migrator'), number_format_i18n((int) $state['index']), number_format_i18n($total))
+                    sprintf(__('%1$s of %2$s files', 'slice-backup'), number_format_i18n((int) $state['index']), number_format_i18n($total))
                 );
                 if ($done) {
                     $job->data['summary']['skippedEntries'] = (array) $state['skipped'];
@@ -805,7 +805,7 @@ class MigratorEngine {
                     (array) $job->data['manifest'],
                     array('plugins' => !empty($want['plugins']), 'themes' => !empty($want['themes']))
                 );
-                self::setProgress($job, __('Checking plugins and themes', 'wp-bundle-migrator'), 1.0);
+                self::setProgress($job, __('Checking plugins and themes', 'slice-backup'), 1.0);
                 return true;
 
             case 'import':
@@ -821,7 +821,7 @@ class MigratorEngine {
                 $report = (array) $job->data['report'];
                 (new CompatibilityInspector())->applyShield($report, !empty($job->options['isolate']));
                 $job->data['report'] = $report;
-                self::setProgress($job, __('Protecting the site from incompatible code', 'wp-bundle-migrator'), 1.0);
+                self::setProgress($job, __('Protecting the site from incompatible code', 'slice-backup'), 1.0);
                 return true;
 
             case 'finalize':
@@ -848,7 +848,7 @@ class MigratorEngine {
 
         $handle = fopen($file, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not read the bundle for sending.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not read the bundle for sending.', 'slice-backup'));
         }
         try {
             $first = true;
@@ -894,7 +894,7 @@ class MigratorEngine {
             $job,
             sprintf(
                 /* translators: %s: site address. */
-                __('Sending to %s', 'wp-bundle-migrator'),
+                __('Sending to %s', 'slice-backup'),
                 (string) wp_parse_url((string) $job->options['push_site'], PHP_URL_HOST)
             ),
             (float) $state['offset'] / max(1.0, $size),
@@ -916,7 +916,7 @@ class MigratorEngine {
             return true;
         }
         if (!is_file($file)) {
-            $job->data['summary']['notes'][] = __('The bundle does not contain a database, so the database was not changed.', 'wp-bundle-migrator');
+            $job->data['summary']['notes'][] = __('The bundle does not contain a database, so the database was not changed.', 'slice-backup');
             return true;
         }
 
@@ -930,7 +930,7 @@ class MigratorEngine {
 
         $handle = fopen($file, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not read the database file from the bundle.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not read the database file from the bundle.', 'slice-backup'));
         }
         Crypto::seek($handle, (float) $state['pos']);
         $size = max(1.0, Storage::filesize($file));
@@ -985,15 +985,15 @@ class MigratorEngine {
 
         if ($eof && trim($query) !== '') {
             $state['errors']++;
-            $state['errorSamples'][] = __('The database file ended in the middle of a statement. The bundle may be truncated.', 'wp-bundle-migrator');
+            $state['errorSamples'][] = __('The database file ended in the middle of a statement. The bundle may be truncated.', 'slice-backup');
         }
 
         self::setProgress(
             $job,
-            __('Importing the database', 'wp-bundle-migrator'),
+            __('Importing the database', 'slice-backup'),
             (float) $state['pos'] / $size,
             /* translators: %s: number of SQL statements. */
-            sprintf(__('%s statements', 'wp-bundle-migrator'), number_format_i18n((int) $state['statements']))
+            sprintf(__('%s statements', 'slice-backup'), number_format_i18n((int) $state['statements']))
         );
 
         if (!$eof) {
@@ -1005,7 +1005,7 @@ class MigratorEngine {
             self::renamePrefixedKeys($sourcePrefix, $targetPrefix);
             $job->data['summary']['notes'][] = sprintf(
                 /* translators: 1: source table prefix, 2: this site's table prefix. */
-                __('Table prefix converted from "%1$s" to "%2$s".', 'wp-bundle-migrator'),
+                __('Table prefix converted from "%1$s" to "%2$s".', 'slice-backup'),
                 $sourcePrefix,
                 $targetPrefix
             );
@@ -1037,10 +1037,10 @@ class MigratorEngine {
         $total = max(1, count($state['tables']));
         self::setProgress(
             $job,
-            __('Updating addresses in the database', 'wp-bundle-migrator'),
+            __('Updating addresses in the database', 'slice-backup'),
             $state['ti'] / $total,
             /* translators: 1: tables done, 2: total tables. */
-            sprintf(__('%1$d of %2$d tables', 'wp-bundle-migrator'), min($state['ti'], $total), $total)
+            sprintf(__('%1$d of %2$d tables', 'slice-backup'), min($state['ti'], $total), $total)
         );
         if (!$done) {
             return false;
@@ -1124,7 +1124,7 @@ class MigratorEngine {
             }
         }
 
-        $self   = basename(untrailingslashit(WPBM_PATH));
+        $self   = basename(untrailingslashit(SLICE_BACKUP_PATH));
         $copies = 0;
         while (!empty($state['queue']) && ($copies === 0 || microtime(true) < $deadline)) {
             $item    = $state['queue'][0];
@@ -1166,10 +1166,10 @@ class MigratorEngine {
         $total = max(1, (int) ($job->state['extract']['total'] ?? $state['done'] + count($state['queue'])));
         self::setProgress(
             $job,
-            __('Copying files into place', 'wp-bundle-migrator'),
+            __('Copying files into place', 'slice-backup'),
             empty($state['queue']) ? 1.0 : min(0.99, $state['done'] / $total),
             /* translators: %s: number of files. */
-            sprintf(__('%s files copied', 'wp-bundle-migrator'), number_format_i18n((int) $state['done']))
+            sprintf(__('%s files copied', 'slice-backup'), number_format_i18n((int) $state['done']))
         );
 
         if (!empty($state['queue'])) {
@@ -1217,13 +1217,13 @@ class MigratorEngine {
                     Notifier::backupResult(true, $job, $result);
                 }
                 /** Fires after a bundle was created. */
-                do_action('wpbm_after_export', $result);
+                do_action('slice_backup_after_export', $result);
                 break;
 
             case 'restore':
                 $result = array(
                     'success'             => true,
-                    'message'             => __('Restore finished.', 'wp-bundle-migrator'),
+                    'message'             => __('Restore finished.', 'slice-backup'),
                     'filename'            => (string) $job->options['filename'],
                     'finishedAt'          => current_time('mysql'),
                     'summary'             => $job->data['summary'],
@@ -1234,7 +1234,7 @@ class MigratorEngine {
                 update_site_option(Plugin::OPTION_REPORT, $result);
                 self::cleanupWork($job, false);
                 /** Fires after a restore finished. */
-                do_action('wpbm_after_restore', $result);
+                do_action('slice_backup_after_restore', $result);
                 break;
 
             case 'upload':
@@ -1248,7 +1248,7 @@ class MigratorEngine {
                 }
                 $final = Storage::dir() . '/' . $job->data['name'];
                 if (!@rename((string) $job->data['part'], $final)) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename
-                    throw new \RuntimeException(__('Could not save the downloaded bundle.', 'wp-bundle-migrator'));
+                    throw new \RuntimeException(__('Could not save the downloaded bundle.', 'slice-backup'));
                 }
                 $job->data['final']  = $final;
                 $job->data['result'] = array('success' => true, 'bundleFile' => $job->data['name']);
@@ -1340,7 +1340,7 @@ class MigratorEngine {
                 continue;
             }
             if ($file === 'wp-config.php') {
-                $notes[] = __('wp-config.php in the bundle was not applied, because it contains the source site\'s database settings. Edit this site\'s wp-config.php by hand if you need any of its settings.', 'wp-bundle-migrator');
+                $notes[] = __('wp-config.php in the bundle was not applied, because it contains the source site\'s database settings. Edit this site\'s wp-config.php by hand if you need any of its settings.', 'slice-backup');
                 continue;
             }
             if (!preg_match(StreamingArchiver::ROOT_FILES_PATTERN, $file)) {

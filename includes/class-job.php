@@ -5,12 +5,12 @@
  * Job state lives in a JSON file inside the protected storage folder, not in the
  * database, so it survives a restore that replaces the database.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -77,9 +77,9 @@ final class Job {
         $active = self::active();
         if ($active !== null) {
             if (!$active->isStalled()) {
-                throw new \RuntimeException(__('Another backup or restore is already running. Wait for it to finish or cancel it, then try again.', 'wp-bundle-migrator'));
+                throw new \RuntimeException(__('Another backup or restore is already running. Wait for it to finish or cancel it, then try again.', 'slice-backup'));
             }
-            $active->fail(__('Stopped because it stalled and a new job was started.', 'wp-bundle-migrator'));
+            $active->fail(__('Stopped because it stalled and a new job was started.', 'slice-backup'));
         }
 
         $job          = new self();
@@ -97,7 +97,7 @@ final class Job {
         $handle = @fopen(self::activePointer(), 'x'); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
             Storage::removeDirectory($job->workDir());
-            throw new \RuntimeException(__('Another backup or restore is already running.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Another backup or restore is already running.', 'slice-backup'));
         }
         fwrite($handle, $job->id); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
         fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
@@ -173,7 +173,7 @@ final class Job {
 
     public function finish(): void {
         $this->status   = 'done';
-        $this->progress = array('label' => __('Finished', 'wp-bundle-migrator'), 'percent' => 100.0, 'detail' => '');
+        $this->progress = array('label' => __('Finished', 'slice-backup'), 'percent' => 100.0, 'detail' => '');
         $this->save();
         $this->release();
     }
@@ -187,7 +187,7 @@ final class Job {
 
     public function cancel(): void {
         $this->status = 'cancelled';
-        $this->error  = __('Cancelled.', 'wp-bundle-migrator');
+        $this->error  = __('Cancelled.', 'slice-backup');
         $this->save();
         $this->release();
     }

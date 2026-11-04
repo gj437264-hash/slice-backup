@@ -2,12 +2,12 @@
 /**
  * Paginated MySQL dumper for single sites and multisite networks.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -35,7 +35,7 @@ class ChunkedDatabaseDumper {
     public function __construct(?int $chunkSize = null) {
         $settings        = Plugin::settings();
         $size            = $chunkSize ?? (int) $settings['chunk_size'];
-        $this->chunkSize = max(100, (int) apply_filters('wpbm_chunk_size', $size));
+        $this->chunkSize = max(100, (int) apply_filters('slice_backup_chunk_size', $size));
     }
 
     /**
@@ -70,13 +70,13 @@ class ChunkedDatabaseDumper {
         $this->siteIds = DbUtil::siteIds();
         $tables        = $this->resolveTablesToDump($options);
         if (empty($tables)) {
-            throw new \RuntimeException(__('No WordPress tables were found to export.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('No WordPress tables were found to export.', 'slice-backup'));
         }
 
-        $header = "-- WP Bundle Migrator SQL export\n-- Generated: " . gmdate('Y-m-d H:i:s') . " UTC\n"
+        $header = "-- Slice Backup SQL export\n-- Generated: " . gmdate('Y-m-d H:i:s') . " UTC\n"
             . "SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS = 0;\nSET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';\n\n";
         if (file_put_contents($targetFile, $header) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-            throw new \RuntimeException(__('Could not create the temporary database file. Check free disk space and folder permissions.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not create the temporary database file. Check free disk space and folder permissions.', 'slice-backup'));
         }
 
         return array(
@@ -102,7 +102,7 @@ class ChunkedDatabaseDumper {
 
         $handle = fopen((string) $state['file'], 'ab'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not write the temporary database file.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not write the temporary database file.', 'slice-backup'));
         }
 
         try {
@@ -135,7 +135,7 @@ class ChunkedDatabaseDumper {
      */
     private function write($handle, string $data): void {
         if (fwrite($handle, $data) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
-            throw new \RuntimeException(__('Writing the database export failed. The disk may be full.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Writing the database export failed. The disk may be full.', 'slice-backup'));
         }
     }
 
@@ -286,7 +286,7 @@ class ChunkedDatabaseDumper {
             if (empty($rows) && $wpdb->last_error !== '') {
                 throw new \RuntimeException(
                     /* translators: 1: table name, 2: database error. */
-                    sprintf(__('Reading table %1$s failed: %2$s', 'wp-bundle-migrator'), $actual, $wpdb->last_error)
+                    sprintf(__('Reading table %1$s failed: %2$s', 'slice-backup'), $actual, $wpdb->last_error)
                 );
             }
             if (empty($rows)) {

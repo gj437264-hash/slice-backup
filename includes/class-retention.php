@@ -2,12 +2,12 @@
 /**
  * Grandfather-father-son retention for scheduled backups.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -61,7 +61,7 @@ final class Retention {
      * Time a scheduled bundle was created, from its name (…-auto-…-YYYYMMDD-HHMMSS-…).
      */
     public static function timeFromName(string $name, int $fallback): int {
-        if (preg_match('/-(\d{8})-(\d{6})-[a-z0-9]+\.(zip|wpbundle)$/', $name, $m)) {
+        if (preg_match('/-(\d{8})-(\d{6})-[a-z0-9]+\.(zip|slicebk)$/', $name, $m)) {
             $time = strtotime($m[1] . 'T' . $m[2] . 'Z');
             if ($time !== false) {
                 return $time;
@@ -111,7 +111,7 @@ final class Retention {
                     $deleted[] = 'cloud:' . $name;
                 }
             } catch (\Throwable $e) {
-                update_site_option('wpbm_retention_error', $e->getMessage());
+                update_site_option('slice_backup_retention_error', $e->getMessage());
             }
         }
 

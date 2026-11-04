@@ -2,12 +2,12 @@
 /**
  * A remote place where bundles are stored (S3-compatible bucket, SFTP server, Dropbox).
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;

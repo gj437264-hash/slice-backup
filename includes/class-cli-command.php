@@ -2,19 +2,19 @@
 /**
  * WP-CLI commands. Recommended for large sites: no web server time limits apply.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
 /**
- * Back up, migrate and restore sites with WP Bundle Migrator.
+ * Back up, migrate and restore sites with Slice Backup.
  */
 final class CliCommand {
     /**
@@ -68,9 +68,9 @@ final class CliCommand {
      *
      * ## EXAMPLES
      *
-     *     wp bundle export
-     *     wp bundle export --preset=db_only
-     *     wp bundle export --components=db,uploads --exclude-revisions
+     *     wp slice-backup export
+     *     wp slice-backup export --preset=db_only
+     *     wp slice-backup export --components=db,uploads --exclude-revisions
      *
      * @param string[]             $args
      * @param array<string, mixed> $assocArgs
@@ -147,14 +147,14 @@ final class CliCommand {
      * : Deactivate plugins that would crash on this PHP version. On by default; use --no-isolate to turn off.
      *
      * [--passphrase=<passphrase>]
-     * : Passphrase of an encrypted (.wpbundle) bundle. Defaults to the saved passphrase.
+     * : Passphrase of an encrypted (.slicebk) bundle. Defaults to the saved passphrase.
      *
      * [--yes]
      * : Skip the confirmation prompt.
      *
      * ## EXAMPLES
      *
-     *     wp bundle import ~/example-com-full-20260101-120000-abc.zip --restore=db,uploads,plugins,themes
+     *     wp slice-backup import ~/example-com-full-20260101-120000-abc.zip --restore=db,uploads,plugins,themes
      *
      * @param string[]             $args
      * @param array<string, mixed> $assocArgs
@@ -293,7 +293,7 @@ final class CliCommand {
      *
      * ## EXAMPLES
      *
-     *     wp bundle pull wpbm1.eyJ1Ijoi... && wp bundle list
+     *     wp slice-backup pull slicebk1.eyJ1Ijoi... && wp slice-backup list
      *
      * @param string[]             $args
      * @param array<string, mixed> $assocArgs
@@ -308,7 +308,7 @@ final class CliCommand {
             \WP_CLI::error($e->getMessage());
             return;
         }
-        \WP_CLI::success(sprintf('Fetched %s. Restore it with: wp bundle import %s', $job->data['result']['bundleFile'], $job->data['result']['bundleFile']));
+        \WP_CLI::success(sprintf('Fetched %s. Restore it with: wp slice-backup import %s', $job->data['result']['bundleFile'], $job->data['result']['bundleFile']));
     }
 
     /**

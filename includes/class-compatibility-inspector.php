@@ -2,12 +2,12 @@
 /**
  * Safe extraction plus a plugin/theme compatibility check for the destination server.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -53,7 +53,7 @@ class CompatibilityInspector {
             } catch (\Throwable $e) {
                 throw new \RuntimeException(
                     /* translators: %s: archive entry name. */
-                    sprintf(__('Unsafe archive: the entry "%s" points outside the extraction folder. Restore stopped.', 'wp-bundle-migrator'), $name)
+                    sprintf(__('Unsafe archive: the entry "%s" points outside the extraction folder. Restore stopped.', 'slice-backup'), $name)
                 );
             }
         }
@@ -99,7 +99,7 @@ class CompatibilityInspector {
                 if ($chunk !== '' && fwrite($out, $chunk) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
                     fclose($in);  // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                     fclose($out); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-                    throw new \RuntimeException(__('Extraction failed while writing to disk. The disk may be full.', 'wp-bundle-migrator'));
+                    throw new \RuntimeException(__('Extraction failed while writing to disk. The disk may be full.', 'slice-backup'));
                 }
             }
             fclose($in);  // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
@@ -130,7 +130,7 @@ class CompatibilityInspector {
         if ($code !== true) {
             throw new \RuntimeException(
                 /* translators: %s: zip error code. */
-                sprintf(__('Could not open the bundle (zip error %s). The file may be incomplete or is not a zip archive.', 'wp-bundle-migrator'), (string) $code)
+                sprintf(__('Could not open the bundle (zip error %s). The file may be incomplete or is not a zip archive.', 'slice-backup'), (string) $code)
             );
         }
 
@@ -150,7 +150,7 @@ class CompatibilityInspector {
                     } catch (\Throwable $e) {
                         throw new \RuntimeException(
                             /* translators: %s: archive entry name. */
-                            sprintf(__('Unsafe archive: the entry "%s" points outside the extraction folder. Restore stopped.', 'wp-bundle-migrator'), $name)
+                            sprintf(__('Unsafe archive: the entry "%s" points outside the extraction folder. Restore stopped.', 'slice-backup'), $name)
                         );
                     }
                 }
@@ -195,7 +195,7 @@ class CompatibilityInspector {
                     if ($chunk !== '' && fwrite($out, $chunk) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
                         fclose($in);  // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                         fclose($out); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-                        throw new \RuntimeException(__('Extraction failed while writing to disk. The disk may be full.', 'wp-bundle-migrator'));
+                        throw new \RuntimeException(__('Extraction failed while writing to disk. The disk may be full.', 'slice-backup'));
                     }
                 }
                 fclose($in);  // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
@@ -264,7 +264,7 @@ class CompatibilityInspector {
         $targetMajor = (int) $targetPhp;
 
         return array(
-            'sourcePhp'       => $sourcePhp !== '' ? $sourcePhp : __('Unknown', 'wp-bundle-migrator'),
+            'sourcePhp'       => $sourcePhp !== '' ? $sourcePhp : __('Unknown', 'slice-backup'),
             'targetPhp'       => $targetPhp,
             'isMajorPhpShift' => $sourcePhp !== '' && $sourceMajor < 8 && $targetMajor >= 8,
             'timedOut'        => microtime(true) > $this->deadline,
@@ -299,7 +299,7 @@ class CompatibilityInspector {
 
         if (!$isolate) {
             foreach (array_merge($plugins, $themes) as $index) {
-                $report['items'][$index]['actionTaken'] = __('Left unchanged because automatic deactivation was turned off. This may cause a fatal error.', 'wp-bundle-migrator');
+                $report['items'][$index]['actionTaken'] = __('Left unchanged because automatic deactivation was turned off. This may cause a fatal error.', 'slice-backup');
             }
             return;
         }
@@ -308,10 +308,10 @@ class CompatibilityInspector {
             $deactivated = $this->deactivatePlugins(array_keys($plugins));
             foreach ($plugins as $slug => $index) {
                 if (in_array($slug, $deactivated, true)) {
-                    $report['items'][$index]['actionTaken'] = __('Deactivated so the site can load. Its files and settings were restored unchanged.', 'wp-bundle-migrator');
+                    $report['items'][$index]['actionTaken'] = __('Deactivated so the site can load. Its files and settings were restored unchanged.', 'slice-backup');
                     $this->writeNotice($slug, (string) $report['items'][$index]['issue']);
                 } else {
-                    $report['items'][$index]['actionTaken'] = __('Restored. It was not active, so nothing was changed.', 'wp-bundle-migrator');
+                    $report['items'][$index]['actionTaken'] = __('Restored. It was not active, so nothing was changed.', 'slice-backup');
                 }
             }
         }
@@ -328,15 +328,15 @@ class CompatibilityInspector {
 
             foreach ($themes as $slug => $index) {
                 if (!in_array($slug, $affected, true)) {
-                    $report['items'][$index]['actionTaken'] = __('Restored. It is not the active theme, so nothing was changed.', 'wp-bundle-migrator');
+                    $report['items'][$index]['actionTaken'] = __('Restored. It is not the active theme, so nothing was changed.', 'slice-backup');
                 } elseif ($fallback !== null) {
                     $report['items'][$index]['actionTaken'] = sprintf(
                         /* translators: %s: theme folder name. */
-                        __('Was the active theme. Switched to "%s" so the site can load.', 'wp-bundle-migrator'),
+                        __('Was the active theme. Switched to "%s" so the site can load.', 'slice-backup'),
                         $fallback
                     );
                 } else {
-                    $report['items'][$index]['actionTaken'] = __('Active theme, but no compatible fallback theme is installed. Install a default theme and activate it.', 'wp-bundle-migrator');
+                    $report['items'][$index]['actionTaken'] = __('Active theme, but no compatible fallback theme is installed. Install a default theme and activate it.', 'slice-backup');
                 }
             }
         }
@@ -407,10 +407,10 @@ class CompatibilityInspector {
             'slug'           => $slug,
             'type'           => $type,
             'status'         => 'compatible',
-            'issue'          => __('No problems found.', 'wp-bundle-migrator'),
+            'issue'          => __('No problems found.', 'slice-backup'),
             'recommendation' => '',
             'file'           => $file,
-            'actionTaken'    => __('Restored.', 'wp-bundle-migrator'),
+            'actionTaken'    => __('Restored.', 'slice-backup'),
         );
 
         $requiresPhp = trim((string) $headers['RequiresPHP']);
@@ -418,13 +418,13 @@ class CompatibilityInspector {
             $item['status']         = 'conflict';
             $item['issue']          = sprintf(
                 /* translators: 1: required PHP version, 2: current PHP version. */
-                __('Requires PHP %1$s or newer, but this server runs PHP %2$s.', 'wp-bundle-migrator'),
+                __('Requires PHP %1$s or newer, but this server runs PHP %2$s.', 'slice-backup'),
                 $requiresPhp,
                 $targetPhp
             );
             $item['recommendation'] = sprintf(
                 /* translators: %s: PHP version. */
-                __('Upgrade the server to PHP %s, or install an older release of this package.', 'wp-bundle-migrator'),
+                __('Upgrade the server to PHP %s, or install an older release of this package.', 'slice-backup'),
                 $requiresPhp
             );
             return $item;
@@ -436,7 +436,7 @@ class CompatibilityInspector {
                 $item['status']         = $finding['severity'] === 'fatal' ? 'conflict' : 'warning';
                 $item['issue']          = $finding['issue'];
                 $item['file']           = $finding['file'] . ($finding['line'] > 0 ? ':' . $finding['line'] : '');
-                $item['recommendation'] = __('Update to a release that supports PHP 8, or ask the developer for a fix.', 'wp-bundle-migrator');
+                $item['recommendation'] = __('Update to a release that supports PHP 8, or ask the developer for a fix.', 'slice-backup');
                 return $item;
             }
         }
@@ -446,10 +446,10 @@ class CompatibilityInspector {
             $item['status']         = 'warning';
             $item['issue']          = sprintf(
                 /* translators: %s: WordPress version. */
-                __('Requires WordPress %s or newer.', 'wp-bundle-migrator'),
+                __('Requires WordPress %s or newer.', 'slice-backup'),
                 $requiresWp
             );
-            $item['recommendation'] = __('Update WordPress on this site.', 'wp-bundle-migrator');
+            $item['recommendation'] = __('Update WordPress on this site.', 'slice-backup');
         }
 
         return $item;
@@ -568,7 +568,7 @@ class CompatibilityInspector {
                         'severity' => 'fatal',
                         'issue'    => sprintf(
                             /* translators: %s: PHP variable name. */
-                            __('Uses the curly-brace offset syntax (%s{…}) that PHP 8 no longer accepts. The file cannot be loaded and would crash the site.', 'wp-bundle-migrator'),
+                            __('Uses the curly-brace offset syntax (%s{…}) that PHP 8 no longer accepts. The file cannot be loaded and would crash the site.', 'slice-backup'),
                             $text
                         ),
                         'file'     => '',
@@ -587,7 +587,7 @@ class CompatibilityInspector {
                         'severity' => 'warning',
                         'issue'    => sprintf(
                             /* translators: %s: PHP function name. */
-                            __('Calls %s(), which was removed in PHP 8. The feature that uses it will fail with an error.', 'wp-bundle-migrator'),
+                            __('Calls %s(), which was removed in PHP 8. The feature that uses it will fail with an error.', 'slice-backup'),
                             $fn
                         ),
                         'file'     => '',
@@ -709,7 +709,7 @@ class CompatibilityInspector {
         if (!is_dir($folder)) {
             return;
         }
-        $text = "WP Bundle Migrator - plugin deactivated during restore\n"
+        $text = "Slice Backup - plugin deactivated during restore\n"
             . "=======================================================\n"
             . "Plugin: {$slug}\n"
             . 'Server PHP version: ' . PHP_VERSION . "\n"

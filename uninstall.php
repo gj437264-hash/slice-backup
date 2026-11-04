@@ -3,78 +3,73 @@
  * Runs when the plugin is deleted from the Plugins screen.
  *
  * Removes settings and temporary files. Stored bundles are deleted only when the
- * WPBM_DELETE_BUNDLES_ON_UNINSTALL constant is true, so backups are not lost by accident.
+ * SLICE_BACKUP_DELETE_BUNDLES_ON_UNINSTALL constant is true, so backups are not lost by accident.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 if (!defined('WP_UNINSTALL_PLUGIN')) {
     exit;
 }
 
-$wpbm_options = array(
-    'wpbm_settings',
-    'wpbm_last_report',
-    'wpbm_db_version',
-    'wpbm_lock',
-    'wpbm_schedule_last',
-    'wpbm_retention_error',
-    // Options from 1.0.x.
-    'wp_bundle_migrator_settings',
-    'wp_bundle_active_extensions',
-    'wp_bundle_migrator_last_conflict_report',
+$slice_backup_options = array(
+    'slice_backup_settings',
+    'slice_backup_last_report',
+    'slice_backup_db_version',
+    'slice_backup_lock',
+    'slice_backup_schedule_last',
+    'slice_backup_retention_error',
 );
-foreach ($wpbm_options as $wpbm_option) {
-    delete_option($wpbm_option);
-    delete_site_option($wpbm_option);
+foreach ($slice_backup_options as $slice_backup_option) {
+    delete_option($slice_backup_option);
+    delete_site_option($slice_backup_option);
 }
-delete_site_transient('wpbm_web_probe');
-delete_site_transient('wpbm_dropbox_access');
-wp_clear_scheduled_hook('wpbm_scheduled_backup');
-wp_unschedule_hook('wpbm_job_tick');
-delete_transient('wp_bundle_migrator_lock');
+delete_site_transient('slice_backup_web_probe');
+delete_site_transient('slice_backup_dropbox_access');
+wp_clear_scheduled_hook('slice_backup_scheduled_backup');
+wp_unschedule_hook('slice_backup_job_tick');
 
 if (is_multisite()) {
     switch_to_blog(get_main_site_id());
 }
-$wpbm_uploads = wp_upload_dir(null, false);
+$slice_backup_uploads = wp_upload_dir(null, false);
 if (is_multisite()) {
     restore_current_blog();
 }
 
-$wpbm_dir = wp_normalize_path(trailingslashit($wpbm_uploads['basedir']) . 'wp-bundle-migrator-temp');
-if (!is_dir($wpbm_dir)) {
+$slice_backup_dir = wp_normalize_path(trailingslashit($slice_backup_uploads['basedir']) . 'slice-backup-temp');
+if (!is_dir($slice_backup_dir)) {
     return;
 }
 
-$wpbm_delete_bundles = defined('WPBM_DELETE_BUNDLES_ON_UNINSTALL') && WPBM_DELETE_BUNDLES_ON_UNINSTALL;
-$wpbm_items          = new RecursiveIteratorIterator(
-    new RecursiveDirectoryIterator($wpbm_dir, FilesystemIterator::SKIP_DOTS),
+$slice_backup_delete_bundles = defined('SLICE_BACKUP_DELETE_BUNDLES_ON_UNINSTALL') && SLICE_BACKUP_DELETE_BUNDLES_ON_UNINSTALL;
+$slice_backup_items          = new RecursiveIteratorIterator(
+    new RecursiveDirectoryIterator($slice_backup_dir, FilesystemIterator::SKIP_DOTS),
     RecursiveIteratorIterator::CHILD_FIRST
 );
 
-foreach ($wpbm_items as $wpbm_item) {
-    $wpbm_path = $wpbm_item->getPathname();
-    $wpbm_name = $wpbm_item->getFilename();
-    $wpbm_is_bundle = (bool) preg_match('/\.(zip|wpbundle)$/i', $wpbm_name) && dirname(wp_normalize_path($wpbm_path)) === $wpbm_dir;
+foreach ($slice_backup_items as $slice_backup_item) {
+    $slice_backup_path = $slice_backup_item->getPathname();
+    $slice_backup_name = $slice_backup_item->getFilename();
+    $slice_backup_is_bundle = (bool) preg_match('/\.(zip|slicebk)$/i', $slice_backup_name) && dirname(wp_normalize_path($slice_backup_path)) === $slice_backup_dir;
 
-    if ($wpbm_is_bundle && !$wpbm_delete_bundles) {
+    if ($slice_backup_is_bundle && !$slice_backup_delete_bundles) {
         continue;
     }
-    if ($wpbm_item->isDir() && !$wpbm_item->isLink()) {
-        @rmdir($wpbm_path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+    if ($slice_backup_item->isDir() && !$slice_backup_item->isLink()) {
+        @rmdir($slice_backup_path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
     } else {
-        @unlink($wpbm_path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+        @unlink($slice_backup_path); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
     }
 }
 
-if ($wpbm_delete_bundles) {
-    @rmdir($wpbm_dir); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+if ($slice_backup_delete_bundles) {
+    @rmdir($slice_backup_dir); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 } else {
     // Keep the web protection for the bundles that remain.
     file_put_contents(
-        $wpbm_dir . '/.htaccess',
+        $slice_backup_dir . '/.htaccess',
         "<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n\tOrder deny,allow\n\tDeny from all\n</IfModule>\n"
     );
-    file_put_contents($wpbm_dir . '/index.php', "<?php\n// Silence is golden.\n");
+    file_put_contents($slice_backup_dir . '/index.php', "<?php\n// Silence is golden.\n");
 }

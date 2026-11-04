@@ -2,12 +2,12 @@
 /**
  * Real server diagnostics and size estimates.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -17,7 +17,7 @@ if (!defined('ABSPATH')) {
  * Environment checks shown on the System tab.
  */
 final class SystemCheck {
-    private const PROBE_TRANSIENT = 'wpbm_web_probe';
+    private const PROBE_TRANSIENT = 'slice_backup_web_probe';
 
     /**
      * @return array<int, array{id: string, label: string, value: string, status: string, help: string}>
@@ -28,74 +28,74 @@ final class SystemCheck {
         $rows = array();
 
         $php       = PHP_VERSION;
-        $phpStatus = version_compare($php, WPBM_MIN_PHP, '<') ? 'fail' : (version_compare($php, '8.1', '<') ? 'warn' : 'ok');
+        $phpStatus = version_compare($php, SLICE_BACKUP_MIN_PHP, '<') ? 'fail' : (version_compare($php, '8.1', '<') ? 'warn' : 'ok');
         $rows[]    = self::row(
             'php',
-            __('PHP version', 'wp-bundle-migrator'),
+            __('PHP version', 'slice-backup'),
             $php,
             $phpStatus,
-            $phpStatus === 'warn' ? __('Supported, but this PHP version no longer receives security updates. Ask your host for PHP 8.1 or newer.', 'wp-bundle-migrator') : ''
+            $phpStatus === 'warn' ? __('Supported, but this PHP version no longer receives security updates. Ask your host for PHP 8.1 or newer.', 'slice-backup') : ''
         );
 
-        $rows[] = self::row('wp', __('WordPress version', 'wp-bundle-migrator'), get_bloginfo('version'), version_compare(get_bloginfo('version'), WPBM_MIN_WP, '<') ? 'fail' : 'ok');
+        $rows[] = self::row('wp', __('WordPress version', 'slice-backup'), get_bloginfo('version'), version_compare(get_bloginfo('version'), SLICE_BACKUP_MIN_WP, '<') ? 'fail' : 'ok');
 
         $zip    = class_exists('ZipArchive');
         $rows[] = self::row(
             'zip',
-            __('PHP zip extension', 'wp-bundle-migrator'),
-            $zip ? __('Enabled', 'wp-bundle-migrator') : __('Missing', 'wp-bundle-migrator'),
+            __('PHP zip extension', 'slice-backup'),
+            $zip ? __('Enabled', 'slice-backup') : __('Missing', 'slice-backup'),
             $zip ? 'ok' : 'fail',
-            $zip ? '' : __('Required to create and restore bundles. Ask your host to enable the "zip" PHP extension.', 'wp-bundle-migrator')
+            $zip ? '' : __('Required to create and restore bundles. Ask your host to enable the "zip" PHP extension.', 'slice-backup')
         );
 
         $crypto = Crypto::available();
         $rows[] = self::row(
             'openssl',
-            __('Encryption (OpenSSL AES-256-GCM)', 'wp-bundle-migrator'),
-            $crypto ? __('Available', 'wp-bundle-migrator') : __('Missing', 'wp-bundle-migrator'),
+            __('Encryption (OpenSSL AES-256-GCM)', 'slice-backup'),
+            $crypto ? __('Available', 'slice-backup') : __('Missing', 'slice-backup'),
             $crypto ? 'ok' : 'warn',
-            $crypto ? '' : __('Encrypted bundles and stored cloud keys need the PHP OpenSSL extension.', 'wp-bundle-migrator')
+            $crypto ? '' : __('Encrypted bundles and stored cloud keys need the PHP OpenSSL extension.', 'slice-backup')
         );
 
         $sockets = function_exists('fsockopen') && strpos((string) ini_get('disable_functions'), 'fsockopen') === false;
         $rows[]  = self::row(
             'sftp',
-            __('SFTP support', 'wp-bundle-migrator'),
-            $sockets ? __('Available (bundled phpseclib)', 'wp-bundle-migrator') : __('Unavailable', 'wp-bundle-migrator'),
+            __('SFTP support', 'slice-backup'),
+            $sockets ? __('Available (bundled phpseclib)', 'slice-backup') : __('Unavailable', 'slice-backup'),
             $sockets ? 'ok' : 'warn',
             $sockets
-                ? (extension_loaded('gmp') || extension_loaded('openssl') ? '' : __('Works, but the PHP gmp or openssl extension would make connections faster.', 'wp-bundle-migrator'))
-                : __('The host disabled fsockopen(), so this server cannot open SFTP connections.', 'wp-bundle-migrator')
+                ? (extension_loaded('gmp') || extension_loaded('openssl') ? '' : __('Works, but the PHP gmp or openssl extension would make connections faster.', 'slice-backup'))
+                : __('The host disabled fsockopen(), so this server cannot open SFTP connections.', 'slice-backup')
         );
 
         $cronDisabled = defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
         $next         = Scheduler::nextRun();
         $overdue      = $next !== null && $next < time() - HOUR_IN_SECONDS;
-        $cronValue    = $cronDisabled ? __('Disabled in wp-config.php (needs a server cron job)', 'wp-bundle-migrator') : __('Enabled', 'wp-bundle-migrator');
+        $cronValue    = $cronDisabled ? __('Disabled in wp-config.php (needs a server cron job)', 'slice-backup') : __('Enabled', 'slice-backup');
         if ($next !== null) {
             $cronValue .= ' · ' . sprintf(
                 /* translators: %s: date and time. */
-                __('next backup %s', 'wp-bundle-migrator'),
+                __('next backup %s', 'slice-backup'),
                 wp_date((string) get_option('date_format') . ' ' . (string) get_option('time_format'), $next)
             );
         }
         $rows[] = self::row(
             'cron',
-            __('WP-Cron (scheduled backups)', 'wp-bundle-migrator'),
+            __('WP-Cron (scheduled backups)', 'slice-backup'),
             $cronValue,
             $overdue ? 'fail' : ($cronDisabled ? 'warn' : 'ok'),
             $overdue
-                ? __('A scheduled backup is more than an hour late, so WP-Cron is not running. Add a server cron job that calls wp-cron.php every 5 minutes.', 'wp-bundle-migrator')
-                : __('WP-Cron runs when people visit the site. On low-traffic sites, add a server cron job that calls wp-cron.php every 5 minutes so schedules run on time.', 'wp-bundle-migrator')
+                ? __('A scheduled backup is more than an hour late, so WP-Cron is not running. Add a server cron job that calls wp-cron.php every 5 minutes.', 'slice-backup')
+                : __('WP-Cron runs when people visit the site. On low-traffic sites, add a server cron job that calls wp-cron.php every 5 minutes so schedules run on time.', 'slice-backup')
         );
 
         $tokenizer = function_exists('token_get_all');
         $rows[]    = self::row(
             'tokenizer',
-            __('PHP tokenizer extension', 'wp-bundle-migrator'),
-            $tokenizer ? __('Enabled', 'wp-bundle-migrator') : __('Missing', 'wp-bundle-migrator'),
+            __('PHP tokenizer extension', 'slice-backup'),
+            $tokenizer ? __('Enabled', 'slice-backup') : __('Missing', 'slice-backup'),
             $tokenizer ? 'ok' : 'warn',
-            $tokenizer ? '' : __('Without it, the PHP 8 code check during restore is skipped.', 'wp-bundle-migrator')
+            $tokenizer ? '' : __('Without it, the PHP 8 code check during restore is skipped.', 'slice-backup')
         );
 
         try {
@@ -103,84 +103,84 @@ final class SystemCheck {
             $writable = wp_is_writable($dir);
             $rows[]   = self::row(
                 'storage',
-                __('Backup folder', 'wp-bundle-migrator'),
+                __('Backup folder', 'slice-backup'),
                 self::relativePath($dir),
                 $writable ? 'ok' : 'fail',
-                $writable ? '' : __('The folder is not writable. Fix its permissions so bundles can be saved.', 'wp-bundle-migrator')
+                $writable ? '' : __('The folder is not writable. Fix its permissions so bundles can be saved.', 'slice-backup')
             );
 
             $free = function_exists('disk_free_space') ? @disk_free_space($dir) : false; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
             if ($free !== false) {
                 $rows[] = self::row(
                     'disk',
-                    __('Free disk space', 'wp-bundle-migrator'),
+                    __('Free disk space', 'slice-backup'),
                     size_format((float) $free, 1),
                     $free < GB_IN_BYTES ? 'warn' : 'ok',
-                    $free < GB_IN_BYTES ? __('A restore needs room for the bundle plus its extracted contents (about twice the bundle size).', 'wp-bundle-migrator') : ''
+                    $free < GB_IN_BYTES ? __('A restore needs room for the bundle plus its extracted contents (about twice the bundle size).', 'slice-backup') : ''
                 );
             }
         } catch (\Throwable $e) {
-            $rows[] = self::row('storage', __('Backup folder', 'wp-bundle-migrator'), __('Unavailable', 'wp-bundle-migrator'), 'fail', $e->getMessage());
+            $rows[] = self::row('storage', __('Backup folder', 'slice-backup'), __('Unavailable', 'slice-backup'), 'fail', $e->getMessage());
         }
 
         $memory      = (string) ini_get('memory_limit');
         $memoryBytes = $memory === '-1' ? PHP_INT_MAX : wp_convert_hr_to_bytes($memory);
         $rows[]      = self::row(
             'memory',
-            __('PHP memory limit', 'wp-bundle-migrator'),
-            $memory === '-1' ? __('Unlimited', 'wp-bundle-migrator') : $memory,
+            __('PHP memory limit', 'slice-backup'),
+            $memory === '-1' ? __('Unlimited', 'slice-backup') : $memory,
             $memoryBytes < 128 * MB_IN_BYTES ? 'warn' : 'ok',
-            $memoryBytes < 128 * MB_IN_BYTES ? __('128 MB or more is recommended.', 'wp-bundle-migrator') : ''
+            $memoryBytes < 128 * MB_IN_BYTES ? __('128 MB or more is recommended.', 'slice-backup') : ''
         );
 
         $time   = (int) ini_get('max_execution_time');
         $rows[] = self::row(
             'time',
-            __('Max execution time', 'wp-bundle-migrator'),
-            $time === 0 ? __('Unlimited', 'wp-bundle-migrator') : sprintf(
+            __('Max execution time', 'slice-backup'),
+            $time === 0 ? __('Unlimited', 'slice-backup') : sprintf(
                 /* translators: %d: seconds. */
-                _n('%d second', '%d seconds', $time, 'wp-bundle-migrator'),
+                _n('%d second', '%d seconds', $time, 'slice-backup'),
                 $time
             ),
             'ok',
             sprintf(
                 /* translators: %d: seconds. */
-                __('Backups and restores run in steps of %d seconds each and resume automatically, so server and proxy time limits do not stop them.', 'wp-bundle-migrator'),
+                __('Backups and restores run in steps of %d seconds each and resume automatically, so server and proxy time limits do not stop them.', 'slice-backup'),
                 (int) Plugin::settings()['step_seconds']
             )
         );
 
         $rows[] = self::row(
             'upload',
-            __('Upload limit per request', 'wp-bundle-migrator'),
+            __('Upload limit per request', 'slice-backup'),
             size_format(wp_max_upload_size()),
             'info',
-            __('Bundles of any size are uploaded in smaller pieces, so this limit does not cap the bundle size.', 'wp-bundle-migrator')
+            __('Bundles of any size are uploaded in smaller pieces, so this limit does not cap the bundle size.', 'slice-backup')
         );
 
         $packet = (int) $wpdb->get_var('SELECT @@max_allowed_packet');
         if ($packet > 0) {
             $rows[] = self::row(
                 'packet',
-                __('MySQL max_allowed_packet', 'wp-bundle-migrator'),
+                __('MySQL max_allowed_packet', 'slice-backup'),
                 size_format($packet),
                 $packet < 2 * MB_IN_BYTES ? 'warn' : 'ok',
-                $packet < 2 * MB_IN_BYTES ? __('Very large single values (for example big serialized options) may fail to import.', 'wp-bundle-migrator') : ''
+                $packet < 2 * MB_IN_BYTES ? __('Very large single values (for example big serialized options) may fail to import.', 'slice-backup') : ''
             );
         }
 
-        $rows[] = self::row('db', __('Database server', 'wp-bundle-migrator'), (string) $wpdb->db_server_info(), 'info');
+        $rows[] = self::row('db', __('Database server', 'slice-backup'), (string) $wpdb->db_server_info(), 'info');
 
         $rows[] = self::row(
             'multisite',
-            __('Multisite', 'wp-bundle-migrator'),
+            __('Multisite', 'slice-backup'),
             is_multisite()
                 ? sprintf(
                     /* translators: %d: number of sites. */
-                    _n('Network with %d site', 'Network with %d sites', (int) get_blog_count(), 'wp-bundle-migrator'),
+                    _n('Network with %d site', 'Network with %d sites', (int) get_blog_count(), 'slice-backup'),
                     (int) get_blog_count()
                 )
-                : __('Single site', 'wp-bundle-migrator'),
+                : __('Single site', 'slice-backup'),
             'info'
         );
 
@@ -194,7 +194,7 @@ final class SystemCheck {
      * @return array{id: string, label: string, value: string, status: string, help: string}
      */
     public static function webAccessProbe(bool $force = false): array {
-        $label  = __('Backups hidden from the web', 'wp-bundle-migrator');
+        $label  = __('Backups hidden from the web', 'slice-backup');
         $cached = get_site_transient(self::PROBE_TRANSIENT);
         if (!$force && is_array($cached)) {
             return $cached;
@@ -203,7 +203,7 @@ final class SystemCheck {
         try {
             $dir = Storage::dir();
         } catch (\Throwable $e) {
-            return self::row('probe', $label, __('Unknown', 'wp-bundle-migrator'), 'warn', $e->getMessage());
+            return self::row('probe', $label, __('Unknown', 'slice-backup'), 'warn', $e->getMessage());
         }
 
         $name  = 'probe-' . strtolower(wp_generate_password(16, false)) . '.txt';
@@ -224,24 +224,24 @@ final class SystemCheck {
             $row = self::row(
                 'probe',
                 $label,
-                __('Could not test', 'wp-bundle-migrator'),
+                __('Could not test', 'slice-backup'),
                 'warn',
-                __('The server could not make a request to itself. Check manually that files in the backup folder cannot be opened in a browser.', 'wp-bundle-migrator')
+                __('The server could not make a request to itself. Check manually that files in the backup folder cannot be opened in a browser.', 'slice-backup')
             );
         } elseif ((int) wp_remote_retrieve_response_code($response) === 200 && trim((string) wp_remote_retrieve_body($response)) === $token) {
             $row = self::row(
                 'probe',
                 $label,
-                __('No - publicly reachable', 'wp-bundle-migrator'),
+                __('No - publicly reachable', 'slice-backup'),
                 'fail',
                 sprintf(
                     /* translators: %s: Nginx config snippet. */
-                    __('Your web server ignores the .htaccess protection (common with Nginx). Anyone who guesses a file name could download a backup. Ask your host to add: %s', 'wp-bundle-migrator'),
+                    __('Your web server ignores the .htaccess protection (common with Nginx). Anyone who guesses a file name could download a backup. Ask your host to add: %s', 'slice-backup'),
                     'location ^~ ' . wp_parse_url(Storage::url(), PHP_URL_PATH) . '/ { deny all; }'
                 )
             );
         } else {
-            $row = self::row('probe', $label, __('Yes', 'wp-bundle-migrator'), 'ok');
+            $row = self::row('probe', $label, __('Yes', 'slice-backup'), 'ok');
         }
 
         set_site_transient(self::PROBE_TRANSIENT, $row, 12 * HOUR_IN_SECONDS);
@@ -278,7 +278,7 @@ final class SystemCheck {
 
         $dirs = array(
             'uploads'    => array(array((string) $uploads['basedir']), array($storage)),
-            'plugins'    => array(array(WP_PLUGIN_DIR), array(untrailingslashit(WPBM_PATH))),
+            'plugins'    => array(array(WP_PLUGIN_DIR), array(untrailingslashit(SLICE_BACKUP_PATH))),
             'themes'     => array(array(get_theme_root()), array()),
             'mu_plugins' => array(array(defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins'), array()),
             'languages'  => array(array(defined('WP_LANG_DIR') ? WP_LANG_DIR : WP_CONTENT_DIR . '/languages'), array()),

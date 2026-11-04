@@ -2,12 +2,12 @@
 /**
  * Path jail that prevents "Zip Slip" directory traversal (CWE-22) during extraction.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;

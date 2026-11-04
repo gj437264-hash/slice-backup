@@ -6,12 +6,12 @@
  * job tick, which is authorized by the job's random token (so a restore can keep
  * running after the database, and with it the user's session, has been replaced).
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -22,43 +22,43 @@ if (!defined('ABSPATH')) {
  */
 final class AjaxController {
     private const ACTIONS = array(
-        'wpbm_job_start'     => 'jobStart',
-        'wpbm_job_status'    => 'jobStatus',
-        'wpbm_job_cancel'    => 'jobCancel',
-        'wpbm_list'          => 'listBundles',
-        'wpbm_inspect'       => 'inspect',
-        'wpbm_delete'        => 'delete',
-        'wpbm_upload_chunk'  => 'uploadChunk',
-        'wpbm_save_settings' => 'saveSettings',
-        'wpbm_estimate'      => 'estimate',
-        'wpbm_report'        => 'lastReport',
-        'wpbm_probe'         => 'probe',
-        'wpbm_download'      => 'download',
-        'wpbm_cloud_test'    => 'cloudTest',
-        'wpbm_cloud_list'    => 'cloudList',
-        'wpbm_cloud_delete'  => 'cloudDelete',
-        'wpbm_schedule_now'  => 'scheduleNow',
-        'wpbm_peer_key'      => 'peerKey',
-        'wpbm_peer_revoke'   => 'peerRevoke',
-        'wpbm_peer_check'    => 'peerCheck',
-        'wpbm_dropbox_start' => 'dropboxStart',
-        'wpbm_dropbox_finish' => 'dropboxFinish',
+        'slice_backup_job_start'     => 'jobStart',
+        'slice_backup_job_status'    => 'jobStatus',
+        'slice_backup_job_cancel'    => 'jobCancel',
+        'slice_backup_list'          => 'listBundles',
+        'slice_backup_inspect'       => 'inspect',
+        'slice_backup_delete'        => 'delete',
+        'slice_backup_upload_chunk'  => 'uploadChunk',
+        'slice_backup_save_settings' => 'saveSettings',
+        'slice_backup_estimate'      => 'estimate',
+        'slice_backup_report'        => 'lastReport',
+        'slice_backup_probe'         => 'probe',
+        'slice_backup_download'      => 'download',
+        'slice_backup_cloud_test'    => 'cloudTest',
+        'slice_backup_cloud_list'    => 'cloudList',
+        'slice_backup_cloud_delete'  => 'cloudDelete',
+        'slice_backup_schedule_now'  => 'scheduleNow',
+        'slice_backup_peer_key'      => 'peerKey',
+        'slice_backup_peer_revoke'   => 'peerRevoke',
+        'slice_backup_peer_check'    => 'peerCheck',
+        'slice_backup_dropbox_start' => 'dropboxStart',
+        'slice_backup_dropbox_finish' => 'dropboxFinish',
     );
 
     public static function init(): void {
         foreach (self::ACTIONS as $action => $method) {
             add_action('wp_ajax_' . $action, array(__CLASS__, $method));
         }
-        add_action('wp_ajax_wpbm_job_tick', array(__CLASS__, 'jobTick'));
-        add_action('wp_ajax_nopriv_wpbm_job_tick', array(__CLASS__, 'jobTick'));
+        add_action('wp_ajax_slice_backup_job_tick', array(__CLASS__, 'jobTick'));
+        add_action('wp_ajax_nopriv_slice_backup_job_tick', array(__CLASS__, 'jobTick'));
     }
 
     private static function guard(): void {
         if (!Plugin::currentUserCan()) {
-            wp_send_json_error(array('message' => __('You do not have permission to do this.', 'wp-bundle-migrator')), 403);
+            wp_send_json_error(array('message' => __('You do not have permission to do this.', 'slice-backup')), 403);
         }
-        if (!check_ajax_referer('wpbm_admin', 'nonce', false)) {
-            wp_send_json_error(array('message' => __('Your session has expired. Reload the page and try again.', 'wp-bundle-migrator'), 'code' => 'bad_nonce'), 403);
+        if (!check_ajax_referer('slice_backup_admin', 'nonce', false)) {
+            wp_send_json_error(array('message' => __('Your session has expired. Reload the page and try again.', 'slice-backup'), 'code' => 'bad_nonce'), 403);
         }
     }
 
@@ -149,7 +149,7 @@ final class AjaxController {
                     break;
 
                 default:
-                    throw new \InvalidArgumentException(__('Unknown job type.', 'wp-bundle-migrator'));
+                    throw new \InvalidArgumentException(__('Unknown job type.', 'slice-backup'));
             }
 
             MigratorEngine::scheduleBackgroundTick($job);
@@ -170,7 +170,7 @@ final class AjaxController {
 
         $job = Job::load($id);
         if ($job === null || !$job->checkToken($token)) {
-            wp_send_json_error(array('message' => __('Unknown or expired job.', 'wp-bundle-migrator')), 403);
+            wp_send_json_error(array('message' => __('Unknown or expired job.', 'slice-backup')), 403);
         }
 
         if ($job->status === 'running') {
@@ -202,7 +202,7 @@ final class AjaxController {
         self::guard();
         try {
             if (!Plugin::settings()['schedule']['enabled']) {
-                throw new \InvalidArgumentException(__('Turn on scheduled backups first.', 'wp-bundle-migrator'));
+                throw new \InvalidArgumentException(__('Turn on scheduled backups first.', 'slice-backup'));
             }
             $schedule = Plugin::settings()['schedule'];
             $job      = MigratorEngine::startExport(
@@ -278,21 +278,21 @@ final class AjaxController {
             $manifest = Storage::summarizeManifest($raw);
 
             if ($manifest === null) {
-                $warnings[] = __('This file has no bundle.json manifest, so its contents and source site are unknown. It may not be a WP Bundle Migrator bundle.', 'wp-bundle-migrator');
+                $warnings[] = __('This file has no bundle.json manifest, so its contents and source site are unknown. It may not be a Slice Backup bundle.', 'slice-backup');
             } else {
                 if ($manifest['isMultisite'] && !is_multisite()) {
-                    $warnings[] = __('This bundle was made from a multisite network, but this site is a single site. Only the main site will work after restoring.', 'wp-bundle-migrator');
+                    $warnings[] = __('This bundle was made from a multisite network, but this site is a single site. Only the main site will work after restoring.', 'slice-backup');
                 }
                 if (!$manifest['isMultisite'] && is_multisite()) {
-                    $warnings[] = __('This bundle is from a single site, but this is a multisite network. Restoring the database replaces the main site and the network\'s users table.', 'wp-bundle-migrator');
+                    $warnings[] = __('This bundle is from a single site, but this is a multisite network. Restoring the database replaces the main site and the network\'s users table.', 'slice-backup');
                 }
                 if ($manifest['multisiteMode'] === 'subsite' && !$manifest['standalone']) {
-                    $warnings[] = __('This bundle holds one network site plus the whole network\'s users table. Restoring it overwrites all network users.', 'wp-bundle-migrator');
+                    $warnings[] = __('This bundle holds one network site plus the whole network\'s users table. Restoring it overwrites all network users.', 'slice-backup');
                 }
                 if ($manifest['tablePrefix'] !== '' && $manifest['tablePrefix'] !== $wpdb->base_prefix) {
                     $warnings[] = sprintf(
                         /* translators: 1: bundle table prefix, 2: this site's prefix. */
-                        __('The bundle uses table prefix "%1$s"; it will be converted to this site\'s prefix "%2$s" automatically.', 'wp-bundle-migrator'),
+                        __('The bundle uses table prefix "%1$s"; it will be converted to this site\'s prefix "%2$s" automatically.', 'slice-backup'),
                         $manifest['tablePrefix'],
                         $wpdb->base_prefix
                     );
@@ -300,7 +300,7 @@ final class AjaxController {
                 if ($manifest['phpVersion'] !== '' && (int) $manifest['phpVersion'] < 8 && (int) PHP_VERSION >= 8) {
                     $warnings[] = sprintf(
                         /* translators: 1: source PHP version, 2: this server's PHP version. */
-                        __('The source site ran PHP %1$s and this server runs PHP %2$s. Old plugins or themes may not work; the compatibility check will deactivate any that would crash the site.', 'wp-bundle-migrator'),
+                        __('The source site ran PHP %1$s and this server runs PHP %2$s. Old plugins or themes may not work; the compatibility check will deactivate any that would crash the site.', 'slice-backup'),
                         $manifest['phpVersion'],
                         PHP_VERSION
                     );
@@ -308,7 +308,7 @@ final class AjaxController {
                 if ($manifest['wpVersion'] !== '' && version_compare($manifest['wpVersion'], get_bloginfo('version'), '>') && !in_array('wp_core', $manifest['components'], true)) {
                     $warnings[] = sprintf(
                         /* translators: 1: bundle WordPress version, 2: this site's WordPress version. */
-                        __('The bundle is from WordPress %1$s, which is newer than this site (%2$s). Update WordPress first, or the database may not match.', 'wp-bundle-migrator'),
+                        __('The bundle is from WordPress %1$s, which is newer than this site (%2$s). Update WordPress first, or the database may not match.', 'slice-backup'),
                         $manifest['wpVersion'],
                         get_bloginfo('version')
                     );
@@ -334,7 +334,7 @@ final class AjaxController {
         try {
             $name = sanitize_file_name(self::post('file'));
             if (!Storage::delete($name)) {
-                throw new \RuntimeException(__('The file could not be deleted. Check the folder permissions.', 'wp-bundle-migrator'));
+                throw new \RuntimeException(__('The file could not be deleted. Check the folder permissions.', 'slice-backup'));
             }
             wp_send_json_success(array('deleted' => $name));
         } catch (\Throwable $e) {
@@ -352,12 +352,12 @@ final class AjaxController {
             // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- Verified in guard(); tmp_name is a server path.
             $tmp = isset($_FILES['chunk']['tmp_name']) ? (string) $_FILES['chunk']['tmp_name'] : '';
             if ($tmp === '' || !is_uploaded_file($tmp)) {
-                throw new \InvalidArgumentException(__('No upload data was received. The piece may exceed the server upload limit.', 'wp-bundle-migrator'));
+                throw new \InvalidArgumentException(__('No upload data was received. The piece may exceed the server upload limit.', 'slice-backup'));
             }
 
             $result = Storage::receiveChunk(self::post('upload_id'), (float) self::post('offset', '0'), (float) self::post('total_size', '0'), self::post('filename'), $tmp);
             if (isset($result['expected'])) {
-                wp_send_json_error(array('code' => 'offset_mismatch', 'expected' => $result['expected'], 'message' => __('Upload out of sync; resuming.', 'wp-bundle-migrator')), 409);
+                wp_send_json_error(array('code' => 'offset_mismatch', 'expected' => $result['expected'], 'message' => __('Upload out of sync; resuming.', 'slice-backup')), 409);
             }
             wp_send_json_success($result);
         } catch (\Throwable $e) {
@@ -383,7 +383,7 @@ final class AjaxController {
                     'settings'   => Plugin::publicSettings(),
                     'nextRun'    => Scheduler::nextRun(),
                     'cloudReady' => Cloud::isConfigured(),
-                    'message'    => __('Settings saved.', 'wp-bundle-migrator'),
+                    'message'    => __('Settings saved.', 'slice-backup'),
                 )
             );
         } catch (\Throwable $e) {
@@ -512,10 +512,10 @@ final class AjaxController {
         self::guard();
         $appKey = sanitize_text_field(self::post('app_key'));
         if ($appKey === '') {
-            wp_send_json_error(array('message' => __('Enter your Dropbox app key first.', 'wp-bundle-migrator')), 400);
+            wp_send_json_error(array('message' => __('Enter your Dropbox app key first.', 'slice-backup')), 400);
         }
         $verifier = DropboxDestination::newVerifier();
-        set_transient('wpbm_dropbox_pkce_' . get_current_user_id(), Crypto::seal($verifier . '|' . $appKey), 30 * MINUTE_IN_SECONDS);
+        set_transient('slice_backup_dropbox_pkce_' . get_current_user_id(), Crypto::seal($verifier . '|' . $appKey), 30 * MINUTE_IN_SECONDS);
         wp_send_json_success(array('url' => DropboxDestination::authorizeUrl($appKey, $verifier)));
     }
 
@@ -525,13 +525,13 @@ final class AjaxController {
     public static function dropboxFinish(): void {
         self::guard();
         try {
-            $stored = Crypto::open((string) get_transient('wpbm_dropbox_pkce_' . get_current_user_id()));
+            $stored = Crypto::open((string) get_transient('slice_backup_dropbox_pkce_' . get_current_user_id()));
             if ($stored === '' || strpos($stored, '|') === false) {
-                throw new \InvalidArgumentException(__('The connection request expired. Click "Connect Dropbox" again.', 'wp-bundle-migrator'));
+                throw new \InvalidArgumentException(__('The connection request expired. Click "Connect Dropbox" again.', 'slice-backup'));
             }
             list($verifier, $appKey) = explode('|', $stored, 2);
             $result = DropboxDestination::exchangeCode($appKey, sanitize_text_field(self::post('code')), $verifier);
-            delete_transient('wpbm_dropbox_pkce_' . get_current_user_id());
+            delete_transient('slice_backup_dropbox_pkce_' . get_current_user_id());
 
             $s                             = Plugin::settings();
             $s['cloud']['provider']        = 'dropbox';
@@ -543,7 +543,7 @@ final class AjaxController {
                 array(
                     'account' => $result['account'],
                     /* translators: %s: Dropbox account name. */
-                    'message' => sprintf(__('Dropbox connected: %s', 'wp-bundle-migrator'), $result['account'] !== '' ? $result['account'] : __('account linked', 'wp-bundle-migrator')),
+                    'message' => sprintf(__('Dropbox connected: %s', 'slice-backup'), $result['account'] !== '' ? $result['account'] : __('account linked', 'slice-backup')),
                 )
             );
         } catch (\Throwable $e) {
@@ -574,11 +574,11 @@ final class AjaxController {
      */
     public static function download(): void {
         if (!Plugin::currentUserCan()) {
-            wp_die(esc_html__('You do not have permission to download bundles.', 'wp-bundle-migrator'), '', array('response' => 403));
+            wp_die(esc_html__('You do not have permission to download bundles.', 'slice-backup'), '', array('response' => 403));
         }
         $nonce = isset($_GET['nonce']) ? sanitize_text_field(wp_unslash($_GET['nonce'])) : '';
-        if (!wp_verify_nonce($nonce, 'wpbm_download')) {
-            wp_die(esc_html__('This download link has expired. Reload the Backups page and try again.', 'wp-bundle-migrator'), '', array('response' => 403));
+        if (!wp_verify_nonce($nonce, 'slice_backup_download')) {
+            wp_die(esc_html__('This download link has expired. Reload the Backups page and try again.', 'slice-backup'), '', array('response' => 403));
         }
 
         $name = isset($_GET['file']) && is_scalar($_GET['file']) ? sanitize_file_name(wp_unslash((string) $_GET['file'])) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized

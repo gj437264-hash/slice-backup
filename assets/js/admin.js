@@ -1,5 +1,5 @@
 /**
- * WP Bundle Migrator admin screen.
+ * Slice Backup admin screen.
  *
  * Plain JavaScript, no build step. Strings are translatable through wp.i18n.
  * Long operations run as server-side jobs; this script only starts them and
@@ -8,7 +8,7 @@
 (function () {
 	'use strict';
 
-	var cfg = window.wpbmConfig || {};
+	var cfg = window.sliceBackupConfig || {};
 	var i18n = window.wp && window.wp.i18n ? window.wp.i18n : null;
 	var __ = i18n ? i18n.__ : function (s) { return s; };
 	var _n = i18n ? i18n._n : function (s, p, n) { return n === 1 ? s : p; };
@@ -17,7 +17,7 @@
 		var i = 0;
 		return s.replace(/%(\d+\$)?[sd]/g, function () { return String(args[i++]); });
 	};
-	var D = 'wp-bundle-migrator';
+	var D = 'slice-backup';
 
 	var $ = function (sel, ctx) { return (ctx || document).querySelector(sel); };
 	var $$ = function (sel, ctx) { return Array.prototype.slice.call((ctx || document).querySelectorAll(sel)); };
@@ -207,16 +207,16 @@
 
 	function toast(message, type) {
 		type = type || 'success';
-		var region = $('#wpbm-toasts');
+		var region = $('#slicebk-toasts');
 		if (!region) {
 			return;
 		}
-		var node = el('div', { className: 'wpbm-toast wpbm-toast--' + type, role: type === 'error' ? 'alert' : 'status' }, [
+		var node = el('div', { className: 'slicebk-toast slicebk-toast--' + type, role: type === 'error' ? 'alert' : 'status' }, [
 			icon(type === 'error' ? 'dashicons-warning' : (type === 'info' ? 'dashicons-info' : 'dashicons-yes-alt')),
 			el('p', { text: message }),
 			el('button', {
 				type: 'button',
-				className: 'wpbm-toast__close',
+				className: 'slicebk-toast__close',
 				'aria-label': __('Dismiss', D),
 				onClick: function () { node.remove(); }
 			}, [icon('dashicons-no-alt')])
@@ -228,15 +228,15 @@
 	}
 
 	function confirmDialog(options) {
-		var dialog = $('#wpbm-dialog');
+		var dialog = $('#slicebk-dialog');
 		if (!dialog || typeof dialog.showModal !== 'function') {
 			return Promise.resolve(window.confirm(options.message));
 		}
-		$('#wpbm-dialog-title').textContent = options.title;
-		$('#wpbm-dialog-message').textContent = options.message;
-		var confirmBtn = $('#wpbm-dialog-confirm');
+		$('#slicebk-dialog-title').textContent = options.title;
+		$('#slicebk-dialog-message').textContent = options.message;
+		var confirmBtn = $('#slicebk-dialog-confirm');
 		confirmBtn.textContent = options.confirmLabel || __('Continue', D);
-		confirmBtn.classList.toggle('wpbm-button-danger', !!options.danger);
+		confirmBtn.classList.toggle('slicebk-button-danger', !!options.danger);
 
 		return new Promise(function (resolve) {
 			dialog.returnValue = 'cancel';
@@ -253,7 +253,7 @@
 	/* Tabs                                                                */
 	/* ------------------------------------------------------------------ */
 
-	var tabs = $$('.wpbm-tab');
+	var tabs = $$('.slicebk-tab');
 
 	function activateTab(name, focus) {
 		if (!tabs.some(function (t) { return t.dataset.tab === name; })) {
@@ -343,7 +343,7 @@
 				return Promise.resolve();
 			}
 			var payload = Object.assign({ type: type }, data || {});
-			return request('wpbm_job_start', payload).then(function (job) {
+			return request('slice_backup_job_start', payload).then(function (job) {
 				Jobs.follow(job, job.token, handlers || {});
 			});
 		},
@@ -354,7 +354,7 @@
 			Jobs.handlers = handlers;
 			state.busy = true;
 			Jobs.render(job);
-			$('#wpbm-job').hidden = false;
+			$('#slicebk-job').hidden = false;
 			Jobs.startClock(job.created);
 			setStartButtons();
 			Jobs.loop();
@@ -366,7 +366,7 @@
 				if (!Jobs.current) {
 					return Promise.resolve();
 				}
-				return request('wpbm_job_tick', { job: Jobs.current.id, token: Jobs.token }).then(function (job) {
+				return request('slice_backup_job_tick', { job: Jobs.current.id, token: Jobs.token }).then(function (job) {
 					errors = 0;
 					Jobs.current = job;
 					Jobs.render(job);
@@ -380,7 +380,7 @@
 						return Jobs.end({ status: 'failed', error: error.message, type: Jobs.current.type });
 					}
 					// The job keeps running on the server; keep trying, more slowly.
-					$('#wpbm-job-detail').textContent = sprintf(__('Connection problem, retrying (%d)…', D), errors);
+					$('#slicebk-job-detail').textContent = sprintf(__('Connection problem, retrying (%d)…', D), errors);
 					return delay(Math.min(15000, 1000 * errors)).then(step);
 				});
 			};
@@ -390,11 +390,11 @@
 		render: function (job) {
 			var p = job.progress || {};
 			var percent = Math.max(0, Math.min(100, Number(p.percent) || 0));
-			$('#wpbm-job-title').textContent = jobTitles[job.type] || '';
-			$('#wpbm-job-label').textContent = p.label || '';
-			$('#wpbm-job-detail').textContent = p.detail || '';
-			$('#wpbm-job-percent').textContent = Math.floor(percent) + '%';
-			var bar = $('#wpbm-job-bar');
+			$('#slicebk-job-title').textContent = jobTitles[job.type] || '';
+			$('#slicebk-job-label').textContent = p.label || '';
+			$('#slicebk-job-detail').textContent = p.detail || '';
+			$('#slicebk-job-percent').textContent = Math.floor(percent) + '%';
+			var bar = $('#slicebk-job-bar');
 			bar.setAttribute('aria-valuenow', String(Math.floor(percent)));
 			bar.firstElementChild.style.width = percent + '%';
 		},
@@ -402,7 +402,7 @@
 		startClock: function (created) {
 			window.clearInterval(Jobs.timer);
 			var start = created ? created * 1000 : Date.now();
-			var target = $('#wpbm-job-elapsed');
+			var target = $('#slicebk-job-elapsed');
 			var tick = function () { target.textContent = formatDuration((Date.now() - start) / 1000); };
 			tick();
 			Jobs.timer = window.setInterval(tick, 1000);
@@ -414,7 +414,7 @@
 			Jobs.current = null;
 			Jobs.token = '';
 			state.busy = false;
-			$('#wpbm-job').hidden = true;
+			$('#slicebk-job').hidden = true;
 			setStartButtons();
 
 			if (job.status === 'done') {
@@ -433,13 +433,13 @@
 				handlers.onEnd(job);
 			}
 			state.bundles = null;
-			if (!$('#wpbm-panel-backups').hidden) {
+			if (!$('#slicebk-panel-backups').hidden) {
 				loadBackups();
 			}
 		},
 
 		resume: function () {
-			request('wpbm_job_status').then(function (data) {
+			request('slice_backup_job_status').then(function (data) {
 				var job = data.job;
 				if (job && job.status === 'running' && job.token) {
 					Jobs.follow(job, job.token, handlersFor(job.type));
@@ -451,7 +451,7 @@
 		}
 	};
 
-	var cancelBtn = $('#wpbm-job-cancel');
+	var cancelBtn = $('#slicebk-job-cancel');
 	if (cancelBtn) {
 		cancelBtn.addEventListener('click', function () {
 			confirmDialog({
@@ -461,7 +461,7 @@
 				danger: true
 			}).then(function (ok) {
 				if (ok) {
-					request('wpbm_job_cancel').catch(function (e) { toast(e.message, 'error'); });
+					request('slice_backup_job_cancel').catch(function (e) { toast(e.message, 'error'); });
 				}
 			});
 		});
@@ -483,7 +483,7 @@
 	}
 
 	function setStartButtons() {
-		['#wpbm-export-start', '#wpbm-cloud-fetch', '#wpbm-schedule-now'].forEach(function (sel) {
+		['#slicebk-export-start', '#slicebk-cloud-fetch', '#slicebk-schedule-now'].forEach(function (sel) {
 			var b = $(sel);
 			if (b) {
 				b.classList.toggle('is-busy', state.busy);
@@ -497,7 +497,7 @@
 	/* Back up                                                             */
 	/* ------------------------------------------------------------------ */
 
-	var exportForm = $('#wpbm-export-form');
+	var exportForm = $('#slicebk-export-form');
 	var componentKeys = Object.keys(cfg.components || {});
 
 	function componentBox(key) {
@@ -541,7 +541,7 @@
 			return;
 		}
 		var chosen = selectedComponents();
-		var list = $('#wpbm-export-summary');
+		var list = $('#slicebk-export-summary');
 		list.textContent = '';
 
 		var total = 0;
@@ -557,40 +557,40 @@
 			list.appendChild(el('li', {}, [
 				icon(cfg.components[key].icon),
 				el('span', { text: componentLabel(key) }),
-				el('span', { className: 'wpbm-muted', text: size ? (size.partial ? '≥ ' : '') + formatBytes(size.bytes) : '' })
+				el('span', { className: 'slicebk-muted', text: size ? (size.partial ? '≥ ' : '') + formatBytes(size.bytes) : '' })
 			]));
 		});
 
-		var encrypt = $('#wpbm-export-encrypt');
-		var upload = $('#wpbm-export-upload');
+		var encrypt = $('#slicebk-export-encrypt');
+		var upload = $('#slicebk-export-upload');
 		if (encrypt && encrypt.checked) {
 			list.appendChild(el('li', {}, [icon('dashicons-lock'), el('span', { text: __('Encrypted (AES-256)', D) }), el('span')]));
 		}
 		if (upload && upload.checked) {
 			list.appendChild(el('li', {}, [icon('dashicons-cloud-upload'), el('span', { text: __('Copy in cloud storage', D) }), el('span')]));
 		}
-		var push = $('#wpbm-export-push');
+		var push = $('#slicebk-export-push');
 		if (push && push.checked) {
 			list.appendChild(el('li', {}, [icon('dashicons-randomize'), el('span', { text: exportForm.push_restore.checked ? __('Send to the other site and restore it there', D) : __('Send to the other site', D) }), el('span')]));
 		}
-		$('#wpbm-export-passphrase-row').hidden = !(encrypt && encrypt.checked);
-		$('#wpbm-export-delete-row').hidden = !(upload && upload.checked);
-		$('#wpbm-export-push-row').hidden = !(push && push.checked);
+		$('#slicebk-export-passphrase-row').hidden = !(encrypt && encrypt.checked);
+		$('#slicebk-export-delete-row').hidden = !(upload && upload.checked);
+		$('#slicebk-export-push-row').hidden = !(push && push.checked);
 
-		$('#wpbm-contents-count').textContent = sprintf(__('%1$d of %2$d selected', D), chosen.length, componentKeys.length);
-		$('#wpbm-export-estimate').textContent = !chosen.length ? '—' : (known ? (partial ? '≥ ' : '') + formatBytes(total) : __('Calculating…', D));
-		$('#wpbm-config-warning').hidden = chosen.indexOf('root_files') === -1 || (encrypt && encrypt.checked);
-		$('#wpbm-export-empty').hidden = chosen.length > 0;
-		$('#wpbm-export-start').disabled = chosen.length === 0 || state.busy;
+		$('#slicebk-contents-count').textContent = sprintf(__('%1$d of %2$d selected', D), chosen.length, componentKeys.length);
+		$('#slicebk-export-estimate').textContent = !chosen.length ? '—' : (known ? (partial ? '≥ ' : '') + formatBytes(total) : __('Calculating…', D));
+		$('#slicebk-config-warning').hidden = chosen.indexOf('root_files') === -1 || (encrypt && encrypt.checked);
+		$('#slicebk-export-empty').hidden = chosen.length > 0;
+		$('#slicebk-export-start').disabled = chosen.length === 0 || state.busy;
 
-		$$('.wpbm-component', exportForm).forEach(function (label) {
+		$$('.slicebk-component', exportForm).forEach(function (label) {
 			var box = label.querySelector('input');
 			label.classList.toggle('is-checked', box.checked);
 		});
 	}
 
 	function loadEstimate() {
-		request('wpbm_estimate').then(function (data) {
+		request('slice_backup_estimate').then(function (data) {
 			state.sizes = data.sizes || {};
 			Object.keys(state.sizes).forEach(function (key) {
 				var target = exportForm.querySelector('[data-size-for="' + key + '"]');
@@ -609,25 +609,25 @@
 
 	function showExportResult(job) {
 		var res = job.result || {};
-		var card = $('#wpbm-export-result');
-		$('#wpbm-export-result-name').textContent = res.bundleFile || '';
-		$('#wpbm-export-result-size').textContent = res.formattedSize || '';
-		var badges = $('#wpbm-export-result-badges');
+		var card = $('#slicebk-export-result');
+		$('#slicebk-export-result-name').textContent = res.bundleFile || '';
+		$('#slicebk-export-result-size').textContent = res.formattedSize || '';
+		var badges = $('#slicebk-export-result-badges');
 		badges.textContent = '';
 		if (res.encrypted) {
-			badges.appendChild(el('span', { className: 'wpbm-chip' }, [icon('dashicons-lock'), __('Encrypted', D)]));
+			badges.appendChild(el('span', { className: 'slicebk-chip' }, [icon('dashicons-lock'), __('Encrypted', D)]));
 		}
 		if (res.uploaded) {
-			badges.appendChild(el('span', { className: 'wpbm-chip' }, [icon('dashicons-cloud-saved'), __('In cloud storage', D)]));
+			badges.appendChild(el('span', { className: 'slicebk-chip' }, [icon('dashicons-cloud-saved'), __('In cloud storage', D)]));
 		}
 		if (res.pushedTo) {
 			var host = res.pushedTo.replace(/^https?:\/\//, '').replace(/\/$/, '');
-			badges.appendChild(el('span', { className: 'wpbm-chip wpbm-chip--accent' }, [icon('dashicons-randomize'), res.remoteRestored ? sprintf(__('Restored on %s', D), host) : sprintf(__('Sent to %s', D), host)]));
+			badges.appendChild(el('span', { className: 'slicebk-chip slicebk-chip--accent' }, [icon('dashicons-randomize'), res.remoteRestored ? sprintf(__('Restored on %s', D), host) : sprintf(__('Sent to %s', D), host)]));
 			if (res.remoteRestored) {
 				toast(sprintf(__('The site was restored on %s. Log in there with an account from this site.', D), host), 'info');
 			}
 		}
-		var download = $('#wpbm-export-download');
+		var download = $('#slicebk-export-download');
 		download.hidden = !res.downloadUrl;
 		if (res.downloadUrl) {
 			download.href = res.downloadUrl;
@@ -648,7 +648,7 @@
 			var target = event.target;
 			if (target.name === 'export_type') {
 				if (target.value === 'custom') {
-					$('#wpbm-export-contents').open = true;
+					$('#slicebk-export-contents').open = true;
 				} else {
 					applyPreset(target.value);
 				}
@@ -658,7 +658,7 @@
 					radio.checked = true;
 				}
 			} else if (target.name === 'multisite_mode') {
-				$('#wpbm-subsite-options').hidden = target.value !== 'subsite';
+				$('#slicebk-subsite-options').hidden = target.value !== 'subsite';
 			}
 			updateExportSummary();
 		});
@@ -725,16 +725,16 @@
 				data.convert_subsite_standalone = !!f.convert_subsite_standalone;
 			}
 
-			$('#wpbm-export-result').hidden = true;
+			$('#slicebk-export-result').hidden = true;
 			Jobs.start('export', data, handlersFor('export')).catch(function (error) {
 				toast(error.message, 'error');
 			});
 		}
 
-		var pushCheck = $('#wpbm-push-check');
+		var pushCheck = $('#slicebk-push-check');
 		if (pushCheck) {
 			pushCheck.addEventListener('click', function () {
-				checkPeerKey(exportForm.push_key.value, $('#wpbm-push-check-result'), pushCheck);
+				checkPeerKey(exportForm.push_key.value, $('#slicebk-push-check-result'), pushCheck);
 			});
 		}
 
@@ -747,20 +747,20 @@
 	function checkPeerKey(key, out, button) {
 		key = (key || '').trim();
 		if (!key) {
-			out.className = 'wpbm-test-result is-fail';
+			out.className = 'slicebk-test-result is-fail';
 			out.textContent = __('Paste the transfer key of the other site.', D);
 			return Promise.resolve(null);
 		}
 		button.disabled = true;
-		out.className = 'wpbm-test-result';
+		out.className = 'slicebk-test-result';
 		out.textContent = __('Checking…', D);
-		return request('wpbm_peer_check', { key: key }).then(function (info) {
-			out.className = 'wpbm-test-result ' + (info.busy ? 'is-fail' : 'is-ok');
+		return request('slice_backup_peer_check', { key: key }).then(function (info) {
+			out.className = 'slicebk-test-result ' + (info.busy ? 'is-fail' : 'is-ok');
 			out.textContent = sprintf(__('Connected to %1$s (%2$s) — WordPress %3$s, PHP %4$s, plugin %5$s.', D), info.name || '', info.site, info.wp, info.php, info.version) +
 				(info.busy ? ' ' + __('It is busy with another backup or restore right now.', D) : '');
 			return info;
 		}).catch(function (error) {
-			out.className = 'wpbm-test-result is-fail';
+			out.className = 'slicebk-test-result is-fail';
 			out.textContent = error.message;
 			return null;
 		}).then(function (info) {
@@ -774,14 +774,14 @@
 	/* ------------------------------------------------------------------ */
 
 	function loadBackups() {
-		var loading = $('#wpbm-backups-loading');
+		var loading = $('#slicebk-backups-loading');
 		loading.hidden = false;
-		var local = request('wpbm_list').then(function (data) {
+		var local = request('slice_backup_list').then(function (data) {
 			state.bundles = data.bundles || [];
 			state.currentSiteUrl = data.currentSiteUrl;
 			state.totalSize = data.totalSize;
 		});
-		var cloud = cfg.cloudReady ? request('wpbm_cloud_list').then(function (data) {
+		var cloud = cfg.cloudReady ? request('slice_backup_cloud_list').then(function (data) {
 			state.cloud = data.items || [];
 			state.cloudLabel = data.label || '';
 		}).catch(function (error) {
@@ -801,9 +801,9 @@
 	}
 
 	function chips(components) {
-		var wrap = el('span', { className: 'wpbm-chips' });
+		var wrap = el('span', { className: 'slicebk-chips' });
 		(components || []).forEach(function (key) {
-			wrap.appendChild(el('span', { className: 'wpbm-chip', title: componentLabel(key) }, [icon(cfg.components[key] ? cfg.components[key].icon : 'dashicons-media-default'), el('span', { text: componentLabel(key) })]));
+			wrap.appendChild(el('span', { className: 'slicebk-chip', title: componentLabel(key) }, [icon(cfg.components[key] ? cfg.components[key].icon : 'dashicons-media-default'), el('span', { text: componentLabel(key) })]));
 		});
 		return wrap;
 	}
@@ -828,15 +828,15 @@
 	}
 
 	function renderBackups() {
-		var body = $('#wpbm-backups-body');
-		var table = $('#wpbm-backups-table');
-		var empty = $('#wpbm-backups-empty');
-		var query = ($('#wpbm-backups-search').value || '').toLowerCase().trim();
+		var body = $('#slicebk-backups-body');
+		var table = $('#slicebk-backups-table');
+		var empty = $('#slicebk-backups-empty');
+		var query = ($('#slicebk-backups-search').value || '').toLowerCase().trim();
 		body.textContent = '';
 
 		var all = mergedBackups();
 		var cloudCount = (state.cloud || []).length;
-		$('#wpbm-backups-meta').textContent = all.length
+		$('#slicebk-backups-meta').textContent = all.length
 			? sprintf(_n('%1$d backup on this server · %2$s', '%1$d backups on this server · %2$s', (state.bundles || []).length, D), (state.bundles || []).length, state.totalSize || '0 B') +
 				(cfg.cloudReady ? ' · ' + sprintf(__('%1$d in cloud storage (%2$s)', D), cloudCount, state.cloudLabel || '') : '')
 			: '';
@@ -854,36 +854,36 @@
 			var m = b && b.manifest;
 			var source = m && m.siteurl ? m.siteurl.replace(/^https?:\/\//, '') : '';
 			var fromHere = m && state.currentSiteUrl && m.siteurl.replace(/\/$/, '') === state.currentSiteUrl;
-			var encrypted = (b && b.encrypted) || /\.wpbundle$/.test(row.name);
+			var encrypted = (b && b.encrypted) || /\.slicebk$/.test(row.name);
 			var scheduled = row.name.indexOf('-auto-') !== -1;
 
 			var nameCell = el('td', {}, [
-				el('strong', { className: 'wpbm-filename', text: row.name }),
-				el('span', { className: 'wpbm-muted wpbm-small wpbm-block' }, [
+				el('strong', { className: 'slicebk-filename', text: row.name }),
+				el('span', { className: 'slicebk-muted slicebk-small slicebk-block' }, [
 					b ? (m ? (fromHere ? __('This site', D) : sprintf(__('From %s', D), source)) : (encrypted ? __('Encrypted', D) : __('Unknown source', D))) : __('Only in cloud storage', D)
 				])
 			]);
-			var badges = el('span', { className: 'wpbm-chips' });
+			var badges = el('span', { className: 'slicebk-chips' });
 			if (encrypted) {
-				badges.appendChild(el('span', { className: 'wpbm-chip wpbm-chip--accent' }, [icon('dashicons-lock'), __('Encrypted', D)]));
+				badges.appendChild(el('span', { className: 'slicebk-chip slicebk-chip--accent' }, [icon('dashicons-lock'), __('Encrypted', D)]));
 			}
 			if (scheduled) {
-				badges.appendChild(el('span', { className: 'wpbm-chip' }, [icon('dashicons-clock'), __('Scheduled', D)]));
+				badges.appendChild(el('span', { className: 'slicebk-chip' }, [icon('dashicons-clock'), __('Scheduled', D)]));
 			}
 			nameCell.appendChild(badges);
 
-			var where = el('span', { className: 'wpbm-chips' });
+			var where = el('span', { className: 'slicebk-chips' });
 			if (b) {
-				where.appendChild(el('span', { className: 'wpbm-chip' }, [icon('dashicons-database'), __('Server', D)]));
+				where.appendChild(el('span', { className: 'slicebk-chip' }, [icon('dashicons-database'), __('Server', D)]));
 			}
 			if (row.cloud) {
-				where.appendChild(el('span', { className: 'wpbm-chip wpbm-chip--accent' }, [icon('dashicons-cloud-saved'), __('Cloud', D)]));
+				where.appendChild(el('span', { className: 'slicebk-chip slicebk-chip--accent' }, [icon('dashicons-cloud-saved'), __('Cloud', D)]));
 			}
 
 			var actions = [];
 			if (b) {
-				actions.push(el('a', { className: 'button button-small', href: b.downloadUrl }, [icon('dashicons-download'), el('span', { className: 'wpbm-hide-sm', text: __('Download', D) })]));
-				actions.push(el('button', { type: 'button', className: 'button button-small', onClick: function () { useSavedBundle(row.name); } }, [icon('dashicons-backup'), el('span', { className: 'wpbm-hide-sm', text: __('Restore', D) })]));
+				actions.push(el('a', { className: 'button button-small', href: b.downloadUrl }, [icon('dashicons-download'), el('span', { className: 'slicebk-hide-sm', text: __('Download', D) })]));
+				actions.push(el('button', { type: 'button', className: 'button button-small', onClick: function () { useSavedBundle(row.name); } }, [icon('dashicons-backup'), el('span', { className: 'slicebk-hide-sm', text: __('Restore', D) })]));
 				if (cfg.cloudReady && !row.cloud) {
 					actions.push(el('button', {
 						type: 'button',
@@ -892,11 +892,11 @@
 						onClick: function () {
 							Jobs.start('upload', { filename: row.name }, handlersFor('upload')).catch(function (e) { toast(e.message, 'error'); });
 						}
-					}, [icon('dashicons-cloud-upload'), el('span', { className: 'wpbm-hide-sm', text: __('To cloud', D) })]));
+					}, [icon('dashicons-cloud-upload'), el('span', { className: 'slicebk-hide-sm', text: __('To cloud', D) })]));
 				}
 				actions.push(el('button', {
 					type: 'button',
-					className: 'button button-small wpbm-button-ghost-danger',
+					className: 'button button-small slicebk-button-ghost-danger',
 					'aria-label': sprintf(__('Delete %s from this server', D), row.name),
 					title: __('Delete from this server', D),
 					onClick: function () { deleteBundle(row.name, false); }
@@ -906,12 +906,12 @@
 					type: 'button',
 					className: 'button button-small',
 					onClick: function () { fetchFromCloud(row.name); }
-				}, [icon('dashicons-download'), el('span', { className: 'wpbm-hide-sm', text: __('Download to server', D) })]));
+				}, [icon('dashicons-download'), el('span', { className: 'slicebk-hide-sm', text: __('Download to server', D) })]));
 			}
 			if (row.cloud) {
 				actions.push(el('button', {
 					type: 'button',
-					className: 'button button-small wpbm-button-ghost-danger',
+					className: 'button button-small slicebk-button-ghost-danger',
 					'aria-label': sprintf(__('Delete %s from cloud storage', D), row.name),
 					title: __('Delete from cloud storage', D),
 					onClick: function () { deleteBundle(row.name, true); }
@@ -920,17 +920,17 @@
 
 			body.appendChild(el('tr', {}, [
 				nameCell,
-				el('td', {}, [m ? chips(m.components) : el('span', { className: 'wpbm-muted', text: encrypted ? __('Unlock to see', D) : '—' })]),
-				el('td', { className: 'wpbm-num', text: b ? b.formattedSize : row.cloud.formattedSize }),
+				el('td', {}, [m ? chips(m.components) : el('span', { className: 'slicebk-muted', text: encrypted ? __('Unlock to see', D) : '—' })]),
+				el('td', { className: 'slicebk-num', text: b ? b.formattedSize : row.cloud.formattedSize }),
 				el('td', { text: b ? b.createdDate : row.cloud.modifiedDate }),
 				el('td', {}, [where]),
-				el('td', { className: 'wpbm-actions-col' }, actions)
+				el('td', { className: 'slicebk-actions-col' }, actions)
 			]));
 		});
 
 		table.hidden = list.length === 0;
 		empty.hidden = list.length !== 0;
-		$('#wpbm-backups-empty-title').textContent = all.length ? __('No backups match your search', D) : __('No backups yet', D);
+		$('#slicebk-backups-empty-title').textContent = all.length ? __('No backups match your search', D) : __('No backups yet', D);
 	}
 
 	function deleteBundle(filename, fromCloud) {
@@ -943,7 +943,7 @@
 			if (!ok) {
 				return;
 			}
-			request(fromCloud ? 'wpbm_cloud_delete' : 'wpbm_delete', { file: filename }).then(function () {
+			request(fromCloud ? 'slice_backup_cloud_delete' : 'slice_backup_delete', { file: filename }).then(function () {
 				toast(__('Deleted.', D));
 				loadBackups();
 			}).catch(function (error) {
@@ -952,10 +952,10 @@
 		});
 	}
 
-	var search = $('#wpbm-backups-search');
+	var search = $('#slicebk-backups-search');
 	if (search) {
 		search.addEventListener('input', renderBackups);
-		$('#wpbm-backups-refresh').addEventListener('click', loadBackups);
+		$('#slicebk-backups-refresh').addEventListener('click', loadBackups);
 	}
 
 	/* ------------------------------------------------------------------ */
@@ -969,7 +969,7 @@
 			button.setAttribute('aria-pressed', active ? 'true' : 'false');
 		});
 		['upload', 'saved', 'cloud', 'peer'].forEach(function (s) {
-			var node = $('#wpbm-source-' + s);
+			var node = $('#slicebk-source-' + s);
 			if (node) {
 				node.hidden = s !== source;
 			}
@@ -984,7 +984,7 @@
 	});
 
 	function fillSavedSelect() {
-		var select = $('#wpbm-saved-select');
+		var select = $('#slicebk-saved-select');
 		if (!select) {
 			return;
 		}
@@ -999,7 +999,7 @@
 	}
 
 	function fillCloudSelect() {
-		var select = $('#wpbm-cloud-select');
+		var select = $('#slicebk-cloud-select');
 		if (!select) {
 			return;
 		}
@@ -1010,15 +1010,15 @@
 			var local = (state.bundles || []).some(function (b) { return b.filename === item.filename; });
 			select.appendChild(el('option', { value: item.filename, text: item.filename + ' (' + item.formattedSize + ', ' + item.modifiedDate + ')' + (local ? ' — ' + __('already on server', D) : '') }));
 		});
-		$('#wpbm-cloud-fetch').disabled = true;
+		$('#slicebk-cloud-fetch').disabled = true;
 	}
 
-	var cloudSelect = $('#wpbm-cloud-select');
+	var cloudSelect = $('#slicebk-cloud-select');
 	if (cloudSelect) {
 		cloudSelect.addEventListener('change', function () {
-			$('#wpbm-cloud-fetch').disabled = !cloudSelect.value;
+			$('#slicebk-cloud-fetch').disabled = !cloudSelect.value;
 		});
-		$('#wpbm-cloud-fetch').addEventListener('click', function () {
+		$('#slicebk-cloud-fetch').addEventListener('click', function () {
 			if (cloudSelect.value) {
 				fetchFromCloud(cloudSelect.value);
 			}
@@ -1046,7 +1046,7 @@
 	function useSavedBundle(filename) {
 		activateTab('import');
 		setSource('saved');
-		var select = $('#wpbm-saved-select');
+		var select = $('#slicebk-saved-select');
 		var apply = function () {
 			select.value = filename;
 			selectBundle(filename);
@@ -1059,7 +1059,7 @@
 		}
 	}
 
-	var savedSelect = $('#wpbm-saved-select');
+	var savedSelect = $('#slicebk-saved-select');
 	if (savedSelect) {
 		savedSelect.addEventListener('change', function () {
 			if (savedSelect.value) {
@@ -1073,9 +1073,9 @@
 	function resetRestore() {
 		state.selectedBundle = null;
 		state.passphrase = '';
-		$('#wpbm-bundle-details').hidden = true;
-		$('#wpbm-unlock').hidden = true;
-		$('#wpbm-restore-form').hidden = true;
+		$('#slicebk-bundle-details').hidden = true;
+		$('#slicebk-unlock').hidden = true;
+		$('#slicebk-restore-form').hidden = true;
 	}
 
 	function detailRow(label, value) {
@@ -1083,44 +1083,44 @@
 	}
 
 	function selectBundle(filename, passphrase) {
-		var details = $('#wpbm-bundle-details');
+		var details = $('#slicebk-bundle-details');
 		details.hidden = false;
 		details.textContent = '';
-		details.appendChild(el('p', { className: 'wpbm-loading' }, [el('span', { className: 'spinner is-active' }), __('Reading bundle…', D)]));
-		$('#wpbm-restore-result').hidden = true;
-		$('#wpbm-restore-form').hidden = true;
+		details.appendChild(el('p', { className: 'slicebk-loading' }, [el('span', { className: 'spinner is-active' }), __('Reading bundle…', D)]));
+		$('#slicebk-restore-result').hidden = true;
+		$('#slicebk-restore-form').hidden = true;
 
-		request('wpbm_inspect', { filename: filename, passphrase: passphrase || '' }).then(function (data) {
+		request('slice_backup_inspect', { filename: filename, passphrase: passphrase || '' }).then(function (data) {
 			state.selectedBundle = data.filename;
 			if (data.needsPassphrase) {
 				details.hidden = true;
-				$('#wpbm-unlock').hidden = false;
-				$('#wpbm-unlock-error').textContent = data.passphraseError || __('Enter the passphrase that was used to create it.', D);
-				$('#wpbm-unlock-error').classList.toggle('wpbm-error-text', !!data.passphraseError);
-				$('#wpbm-unlock-pass').focus();
+				$('#slicebk-unlock').hidden = false;
+				$('#slicebk-unlock-error').textContent = data.passphraseError || __('Enter the passphrase that was used to create it.', D);
+				$('#slicebk-unlock-error').classList.toggle('slicebk-error-text', !!data.passphraseError);
+				$('#slicebk-unlock-pass').focus();
 				return;
 			}
-			$('#wpbm-unlock').hidden = true;
+			$('#slicebk-unlock').hidden = true;
 			state.passphrase = passphrase || '';
 			state.manifest = data.manifest;
 			renderBundleDetails(data);
 			prepareRestoreForm(data.manifest);
 		}).catch(function (error) {
 			details.textContent = '';
-			details.appendChild(el('div', { className: 'wpbm-callout wpbm-callout--error' }, [icon('dashicons-warning'), el('p', { text: error.message })]));
+			details.appendChild(el('div', { className: 'slicebk-callout slicebk-callout--error' }, [icon('dashicons-warning'), el('p', { text: error.message })]));
 		});
 	}
 
-	var unlockBtn = $('#wpbm-unlock-btn');
+	var unlockBtn = $('#slicebk-unlock-btn');
 	if (unlockBtn) {
 		var unlock = function () {
-			var pass = $('#wpbm-unlock-pass').value;
+			var pass = $('#slicebk-unlock-pass').value;
 			if (state.selectedBundle && pass) {
 				selectBundle(state.selectedBundle, pass);
 			}
 		};
 		unlockBtn.addEventListener('click', unlock);
-		$('#wpbm-unlock-pass').addEventListener('keydown', function (event) {
+		$('#slicebk-unlock-pass').addEventListener('keydown', function (event) {
 			if (event.key === 'Enter') {
 				event.preventDefault();
 				unlock();
@@ -1130,10 +1130,10 @@
 
 	function renderBundleDetails(data) {
 		var m = data.manifest;
-		var details = $('#wpbm-bundle-details');
+		var details = $('#slicebk-bundle-details');
 		details.textContent = '';
 
-		var dl = el('dl', { className: 'wpbm-dl' });
+		var dl = el('dl', { className: 'slicebk-dl' });
 		var rows = [detailRow(__('File', D), data.filename + ' · ' + data.formattedSize + (data.encrypted ? ' · ' + __('encrypted', D) : ''))];
 		if (m) {
 			var created = m.createdAt ? new Date(m.createdAt) : null;
@@ -1148,18 +1148,18 @@
 		}
 		rows.forEach(function (pair) { pair.forEach(function (node) { dl.appendChild(node); }); });
 
-		details.appendChild(el('h3', { className: 'wpbm-subtitle' }, [icon(data.encrypted ? 'dashicons-unlock' : 'dashicons-media-archive'), __('Bundle details', D)]));
+		details.appendChild(el('h3', { className: 'slicebk-subtitle' }, [icon(data.encrypted ? 'dashicons-unlock' : 'dashicons-media-archive'), __('Bundle details', D)]));
 		details.appendChild(dl);
 		if (m) {
 			details.appendChild(chips(m.components));
 		}
 		(data.warnings || []).forEach(function (warning) {
-			details.appendChild(el('div', { className: 'wpbm-callout wpbm-callout--warning' }, [icon('dashicons-info-outline'), el('p', { text: warning })]));
+			details.appendChild(el('div', { className: 'slicebk-callout slicebk-callout--warning' }, [icon('dashicons-info-outline'), el('p', { text: warning })]));
 		});
 	}
 
 	function prepareRestoreForm(manifest) {
-		var form = $('#wpbm-restore-form');
+		var form = $('#slicebk-restore-form');
 		form.hidden = false;
 
 		var present = manifest ? manifest.components : null;
@@ -1168,37 +1168,37 @@
 			var available = !present || present.indexOf(key) !== -1;
 			box.disabled = !available;
 			box.checked = available && key !== 'wp_core' && key !== 'root_files';
-			box.closest('.wpbm-component').classList.toggle('is-missing', !available);
+			box.closest('.slicebk-component').classList.toggle('is-missing', !available);
 		});
 
-		$('#wpbm-old-url').value = manifest && manifest.siteurl ? manifest.siteurl.replace(/\/$/, '') : '';
-		$('#wpbm-new-url').value = cfg.siteUrl || '';
+		$('#slicebk-old-url').value = manifest && manifest.siteurl ? manifest.siteurl.replace(/\/$/, '') : '';
+		$('#slicebk-new-url').value = cfg.siteUrl || '';
 
-		var network = $('#wpbm-network-fields');
+		var network = $('#slicebk-network-fields');
 		if (network) {
 			var show = !!(manifest && manifest.isMultisite);
 			network.hidden = !show;
-			$('#wpbm-old-domain').value = show ? (manifest.networkDomain || '') : '';
+			$('#slicebk-old-domain').value = show ? (manifest.networkDomain || '') : '';
 		}
 
-		$('#wpbm-restore-confirm').checked = false;
+		$('#slicebk-restore-confirm').checked = false;
 		updateRestoreButton();
 		syncRestoreChecks();
 	}
 
 	function syncRestoreChecks() {
 		$$('input[data-restore]').forEach(function (box) {
-			box.closest('.wpbm-component').classList.toggle('is-checked', box.checked);
+			box.closest('.slicebk-component').classList.toggle('is-checked', box.checked);
 		});
 	}
 
 	function updateRestoreButton() {
-		var button = $('#wpbm-restore-start');
+		var button = $('#slicebk-restore-start');
 		if (!button) {
 			return;
 		}
 		var any = $$('input[data-restore]').some(function (box) { return box.checked && !box.disabled; });
-		button.disabled = state.busy || !any || !$('#wpbm-restore-confirm').checked;
+		button.disabled = state.busy || !any || !$('#slicebk-restore-confirm').checked;
 	}
 
 	/* Upload ------------------------------------------------------------- */
@@ -1210,8 +1210,8 @@
 	}
 
 	function uploadFile(file) {
-		if (!/\.(zip|wpbundle)$/i.test(file.name)) {
-			toast(__('Choose a .zip or .wpbundle file created by WP Bundle Migrator.', D), 'error');
+		if (!/\.(zip|slicebk)$/i.test(file.name)) {
+			toast(__('Choose a .zip or .slicebk file created by Slice Backup.', D), 'error');
 			return;
 		}
 		if (state.uploadController) {
@@ -1226,10 +1226,10 @@
 		var retries = 0;
 		var startedAt = Date.now();
 
-		var progress = $('#wpbm-upload-progress');
-		var bar = $('#wpbm-upload-bar');
-		var text = $('#wpbm-upload-text');
-		var dropzone = $('#wpbm-dropzone');
+		var progress = $('#slicebk-upload-progress');
+		var bar = $('#slicebk-upload-bar');
+		var text = $('#slicebk-upload-text');
+		var dropzone = $('#slicebk-dropzone');
 		progress.hidden = false;
 		dropzone.classList.add('is-disabled');
 		resetRestore();
@@ -1245,13 +1245,13 @@
 		function finish() {
 			state.uploadController = null;
 			dropzone.classList.remove('is-disabled');
-			$('#wpbm-file').value = '';
+			$('#slicebk-file').value = '';
 		}
 
 		function next() {
 			report();
 			var piece = file.slice(offset, offset + chunkSize);
-			return request('wpbm_upload_chunk', {
+			return request('slice_backup_upload_chunk', {
 				upload_id: uploadId,
 				offset: offset,
 				total_size: file.size,
@@ -1290,7 +1290,7 @@
 			state.bundles = null;
 			loadBackups().then(function () {
 				setSource('saved');
-				$('#wpbm-saved-select').value = filename;
+				$('#slicebk-saved-select').value = filename;
 			});
 			selectBundle(filename);
 		}).catch(function (error) {
@@ -1300,8 +1300,8 @@
 		});
 	}
 
-	var fileInput = $('#wpbm-file');
-	var dropzone = $('#wpbm-dropzone');
+	var fileInput = $('#slicebk-file');
+	var dropzone = $('#slicebk-dropzone');
 	if (fileInput && dropzone) {
 		fileInput.addEventListener('change', function () {
 			if (fileInput.files && fileInput.files[0]) {
@@ -1326,7 +1326,7 @@
 				uploadFile(files[0]);
 			}
 		});
-		$('#wpbm-upload-cancel').addEventListener('click', function () {
+		$('#slicebk-upload-cancel').addEventListener('click', function () {
 			if (state.uploadController) {
 				state.uploadController.abort();
 			}
@@ -1335,7 +1335,7 @@
 
 	/* Restore ------------------------------------------------------------ */
 
-	var restoreForm = $('#wpbm-restore-form');
+	var restoreForm = $('#slicebk-restore-form');
 	if (restoreForm) {
 		restoreForm.addEventListener('change', function () {
 			syncRestoreChecks();
@@ -1349,8 +1349,8 @@
 			}
 
 			var chosen = $$('input[data-restore]', restoreForm).filter(function (b) { return b.checked && !b.disabled; }).map(function (b) { return b.dataset.restore; });
-			var newUrl = $('#wpbm-new-url').value.trim();
-			var oldUrl = $('#wpbm-old-url').value.trim();
+			var newUrl = $('#slicebk-new-url').value.trim();
+			var oldUrl = $('#slicebk-old-url').value.trim();
 			if ((oldUrl && !/^https?:\/\//i.test(oldUrl)) || (newUrl && !/^https?:\/\//i.test(newUrl))) {
 				toast(__('Addresses must start with http:// or https://', D), 'error');
 				return;
@@ -1389,8 +1389,8 @@
 	function showRestoreResult(job) {
 		var res = job.result || {};
 		activateTab('import');
-		$('#wpbm-restore-form').hidden = true;
-		var target = $('#wpbm-restore-result');
+		$('#slicebk-restore-form').hidden = true;
+		var target = $('#slicebk-restore-result');
 		target.textContent = '';
 		target.appendChild(renderReport(res, true));
 		target.hidden = false;
@@ -1401,27 +1401,27 @@
 	function statusBadge(status) {
 		var labels = { compatible: __('OK', D), warning: __('Warning', D), conflict: __('Conflict', D) };
 		var map = { compatible: 'ok', warning: 'warn', conflict: 'fail' };
-		return el('span', { className: 'wpbm-badge wpbm-badge--' + (map[status] || 'info'), text: labels[status] || status });
+		return el('span', { className: 'slicebk-badge slicebk-badge--' + (map[status] || 'info'), text: labels[status] || status });
 	}
 
 	function renderReport(res, fresh) {
-		var wrap = el('div', { className: 'wpbm-card wpbm-report' });
+		var wrap = el('div', { className: 'slicebk-card slicebk-report' });
 		var summary = res.summary || {};
 		var db = summary.database;
 		var replace = summary.replace && summary.replace.from && summary.replace.from !== summary.replace.to ? summary.replace : null;
 		var compat = res.compatibilityReport || { items: [], summary: {} };
 		var hasErrors = (db && db.errors > 0) || (summary.skippedEntries || []).length > 0;
 
-		wrap.appendChild(el('div', { className: 'wpbm-report__head' }, [
-			el('span', { className: 'wpbm-result__icon dashicons ' + (hasErrors ? 'dashicons-warning is-warn' : 'dashicons-yes-alt'), 'aria-hidden': 'true' }),
+		wrap.appendChild(el('div', { className: 'slicebk-report__head' }, [
+			el('span', { className: 'slicebk-result__icon dashicons ' + (hasErrors ? 'dashicons-warning is-warn' : 'dashicons-yes-alt'), 'aria-hidden': 'true' }),
 			el('div', {}, [
-				el('h2', { className: 'wpbm-card__title', text: hasErrors ? __('Restore finished with warnings', D) : __('Restore complete', D) }),
-				el('p', { className: 'wpbm-muted', text: (res.filename || '') + (res.finishedAt ? ' · ' + res.finishedAt : '') })
+				el('h2', { className: 'slicebk-card__title', text: hasErrors ? __('Restore finished with warnings', D) : __('Restore complete', D) }),
+				el('p', { className: 'slicebk-muted', text: (res.filename || '') + (res.finishedAt ? ' · ' + res.finishedAt : '') })
 			])
 		]));
 
 		if (fresh && res.reloginRequired) {
-			wrap.appendChild(el('div', { className: 'wpbm-callout wpbm-callout--info' }, [
+			wrap.appendChild(el('div', { className: 'slicebk-callout slicebk-callout--info' }, [
 				icon('dashicons-admin-users'),
 				el('div', {}, [
 					el('p', { text: __('The database was replaced, so you are probably logged out. Log in with a user account from the restored site.', D) }),
@@ -1430,7 +1430,7 @@
 			]));
 		}
 
-		var stats = el('ul', { className: 'wpbm-stats' });
+		var stats = el('ul', { className: 'slicebk-stats' });
 		if (db) {
 			stats.appendChild(el('li', {}, [el('strong', { text: String(db.statements) }), el('span', { text: __('SQL statements run', D) })]));
 			stats.appendChild(el('li', { className: db.errors ? 'is-warn' : '' }, [el('strong', { text: String(db.errors) }), el('span', { text: __('SQL errors', D) })]));
@@ -1450,7 +1450,7 @@
 		}
 
 		if (replace) {
-			wrap.appendChild(el('p', { className: 'wpbm-muted' }, [sprintf(__('URLs changed from %1$s to %2$s.', D), replace.from, replace.to)]));
+			wrap.appendChild(el('p', { className: 'slicebk-muted' }, [sprintf(__('URLs changed from %1$s to %2$s.', D), replace.from, replace.to)]));
 		}
 
 		var notes = (summary.notes || []).slice();
@@ -1464,12 +1464,12 @@
 			notes.push(sprintf(_n('%d damaged file in the archive was skipped:', '%d damaged files in the archive were skipped:', summary.skippedEntries.length, D), summary.skippedEntries.length) + ' ' + summary.skippedEntries.slice(0, 10).join(', '));
 		}
 		notes.forEach(function (note) {
-			wrap.appendChild(el('div', { className: 'wpbm-callout wpbm-callout--warning' }, [icon('dashicons-info-outline'), el('p', { text: note })]));
+			wrap.appendChild(el('div', { className: 'slicebk-callout slicebk-callout--warning' }, [icon('dashicons-info-outline'), el('p', { text: note })]));
 		});
 
 		if (compat.items && compat.items.length) {
 			var s = compat.summary || {};
-			wrap.appendChild(el('h3', { className: 'wpbm-subtitle' }, [
+			wrap.appendChild(el('h3', { className: 'slicebk-subtitle' }, [
 				icon('dashicons-shield'),
 				sprintf(__('Compatibility with PHP %1$s: %2$d OK, %3$d warnings, %4$d conflicts', D), compat.targetPhp, s.compatibleCount || 0, s.warningCount || 0, s.conflictCount || 0)
 			]));
@@ -1477,16 +1477,16 @@
 			compat.items.forEach(function (item) {
 				tbody.appendChild(el('tr', { className: 'is-' + item.status }, [
 					el('td', {}, [statusBadge(item.status)]),
-					el('td', {}, [el('strong', { text: item.name }), el('span', { className: 'wpbm-muted wpbm-small wpbm-block', text: item.type === 'plugin' ? __('Plugin', D) : __('Theme', D) })]),
+					el('td', {}, [el('strong', { text: item.name }), el('span', { className: 'slicebk-muted slicebk-small slicebk-block', text: item.type === 'plugin' ? __('Plugin', D) : __('Theme', D) })]),
 					el('td', {}, [
 						el('span', { text: item.issue }),
-						item.status !== 'compatible' && item.file ? el('code', { className: 'wpbm-small wpbm-block', text: item.file }) : null
+						item.status !== 'compatible' && item.file ? el('code', { className: 'slicebk-small slicebk-block', text: item.file }) : null
 					]),
 					el('td', { text: item.actionTaken + (item.recommendation ? ' ' + item.recommendation : '') })
 				]));
 			});
-			wrap.appendChild(el('div', { className: 'wpbm-table-wrap' }, [
-				el('table', { className: 'wpbm-table wpbm-table--report' }, [
+			wrap.appendChild(el('div', { className: 'slicebk-table-wrap' }, [
+				el('table', { className: 'slicebk-table slicebk-table--report' }, [
 					el('thead', {}, [el('tr', {}, [
 						el('th', { scope: 'col', text: __('Status', D) }),
 						el('th', { scope: 'col', text: __('Name', D) }),
@@ -1501,17 +1501,17 @@
 		return wrap;
 	}
 
-	var lastReport = $('#wpbm-last-report');
+	var lastReport = $('#slicebk-last-report');
 	if (lastReport) {
 		lastReport.addEventListener('toggle', function () {
 			if (!lastReport.open || lastReport.dataset.loaded) {
 				return;
 			}
 			lastReport.dataset.loaded = '1';
-			var body = $('#wpbm-last-report-body');
-			request('wpbm_report').then(function (data) {
+			var body = $('#slicebk-last-report-body');
+			request('slice_backup_report').then(function (data) {
 				body.textContent = '';
-				body.appendChild(data.report ? renderReport(data.report, false) : el('p', { className: 'wpbm-muted', text: __('No report available.', D) }));
+				body.appendChild(data.report ? renderReport(data.report, false) : el('p', { className: 'slicebk-muted', text: __('No report available.', D) }));
 			}).catch(function (error) {
 				body.textContent = error.message;
 			});
@@ -1522,7 +1522,7 @@
 	/* Settings                                                            */
 	/* ------------------------------------------------------------------ */
 
-	$$('.wpbm-settings-nav a').forEach(function (link) {
+	$$('.slicebk-settings-nav a').forEach(function (link) {
 		link.addEventListener('click', function (event) {
 			event.preventDefault();
 			var target = document.querySelector(link.getAttribute('href'));
@@ -1553,12 +1553,12 @@
 			data.section = section;
 			var button = form.querySelector('button[type="submit"]');
 			button.disabled = true;
-			request('wpbm_save_settings', data).then(function (res) {
+			request('slice_backup_save_settings', data).then(function (res) {
 				cfg.settings = res.settings;
 				cfg.cloudReady = res.cloudReady;
 				if (section === 'schedule') {
-					$('#wpbm-next-run').textContent = res.nextRun ? new Date(res.nextRun * 1000).toLocaleString() : __('Not scheduled', D);
-					$('#wpbm-schedule-now').disabled = !res.settings.schedule.enabled;
+					$('#slicebk-next-run').textContent = res.nextRun ? new Date(res.nextRun * 1000).toLocaleString() : __('Not scheduled', D);
+					$('#slicebk-schedule-now').disabled = !res.settings.schedule.enabled;
 				}
 				if (section === 'encryption' || section === 'cloud') {
 					// Labels elsewhere on the page depend on these settings.
@@ -1577,11 +1577,11 @@
 	});
 
 	/* Cloud provider fields */
-	var providerSelect = $('#wpbm-cloud-provider');
+	var providerSelect = $('#slicebk-cloud-provider');
 	function renderProvider() {
 		var id = providerSelect.value;
 		var p = (cfg.providers || {})[id];
-		$('#wpbm-cloud-fields').hidden = !p;
+		$('#slicebk-cloud-fields').hidden = !p;
 		if (!p) {
 			return;
 		}
@@ -1591,7 +1591,7 @@
 			// Hidden groups must not submit (or validate) their fields.
 			$$('input, textarea, select', group).forEach(function (field) { field.disabled = !active; });
 		});
-		$('#wpbm-cloud-path-label').textContent = {
+		$('#slicebk-cloud-path-label').textContent = {
 			s3: __('Folder in the bucket', D),
 			sftp: __('Folder on the server', D),
 			dropbox: __('Folder inside the app folder', D)
@@ -1600,10 +1600,10 @@
 			field.hidden = (p.fields || []).indexOf(field.dataset.cloudField) === -1;
 		});
 		syncSftpAuth();
-		var region = $('#wpbm-cloud-region');
+		var region = $('#slicebk-cloud-region');
 		region.placeholder = p.region || '';
 
-		var links = $('#wpbm-provider-links');
+		var links = $('#slicebk-provider-links');
 		links.textContent = '';
 		var labels = { signup: __('Create an account', D), pricing: __('Pricing', D), keys: __('How to create access keys', D) };
 		Object.keys(labels).forEach(function (key) {
@@ -1616,22 +1616,22 @@
 		providerSelect.addEventListener('change', renderProvider);
 		renderProvider();
 
-		$('#wpbm-cloud-test').addEventListener('click', function () {
-			var form = $('#wpbm-set-cloud');
+		$('#slicebk-cloud-test').addEventListener('click', function () {
+			var form = $('#slicebk-set-cloud');
 			var data = formData(form);
-			var out = $('#wpbm-cloud-test-result');
+			var out = $('#slicebk-cloud-test-result');
 			var button = this;
 			button.disabled = true;
-			out.className = 'wpbm-test-result';
+			out.className = 'slicebk-test-result';
 			out.textContent = __('Testing…', D);
-			request('wpbm_cloud_test', data).then(function (res) {
-				out.className = 'wpbm-test-result is-ok';
+			request('slice_backup_cloud_test', data).then(function (res) {
+				out.className = 'slicebk-test-result is-ok';
 				out.textContent = res.message + (res.fingerprint ? ' ' + __('Save the settings to keep trusting this server.', D) : '');
 				if (res.fingerprint) {
-					$('#wpbm-sftp-fingerprint').value = res.fingerprint;
+					$('#slicebk-sftp-fingerprint').value = res.fingerprint;
 				}
 			}).catch(function (error) {
-				out.className = 'wpbm-test-result is-fail';
+				out.className = 'slicebk-test-result is-fail';
 				out.textContent = error.message;
 			}).then(function () {
 				button.disabled = false;
@@ -1653,25 +1653,25 @@
 	});
 
 	/* Dropbox */
-	var dropboxConnect = $('#wpbm-dropbox-connect');
+	var dropboxConnect = $('#slicebk-dropbox-connect');
 	if (dropboxConnect) {
 		dropboxConnect.addEventListener('click', function () {
-			var key = $('#wpbm-dropbox-key').value.trim();
+			var key = $('#slicebk-dropbox-key').value.trim();
 			if (!key) {
 				toast(__('Paste your Dropbox app key first.', D), 'error');
 				return;
 			}
 			// Open the window synchronously so pop-up blockers allow it.
 			var popup = window.open('about:blank', '_blank');
-			request('wpbm_dropbox_start', { app_key: key }).then(function (res) {
+			request('slice_backup_dropbox_start', { app_key: key }).then(function (res) {
 				if (popup) {
 					popup.opener = null;
 					popup.location.href = res.url;
 				} else {
 					window.open(res.url, '_blank', 'noopener');
 				}
-				$('#wpbm-dropbox-code-row').hidden = false;
-				$('#wpbm-dropbox-code').focus();
+				$('#slicebk-dropbox-code-row').hidden = false;
+				$('#slicebk-dropbox-code').focus();
 			}).catch(function (error) {
 				if (popup) {
 					popup.close();
@@ -1679,14 +1679,14 @@
 				toast(error.message, 'error');
 			});
 		});
-		$('#wpbm-dropbox-finish').addEventListener('click', function () {
-			var code = $('#wpbm-dropbox-code').value.trim();
+		$('#slicebk-dropbox-finish').addEventListener('click', function () {
+			var code = $('#slicebk-dropbox-code').value.trim();
 			if (!code) {
 				return;
 			}
 			var button = this;
 			button.disabled = true;
-			request('wpbm_dropbox_finish', { code: code }).then(function (res) {
+			request('slice_backup_dropbox_finish', { code: code }).then(function (res) {
 				toast(res.message + ' ' + __('Reloading…', D));
 				window.setTimeout(function () { window.location.reload(); }, 900);
 			}).catch(function (error) {
@@ -1697,22 +1697,22 @@
 	}
 
 	/* Site-to-site transfer keys */
-	var peerGenerate = $('#wpbm-peer-generate');
+	var peerGenerate = $('#slicebk-peer-generate');
 	if (peerGenerate) {
 		peerGenerate.addEventListener('click', function () {
 			var go = function () {
-				request('wpbm_peer_key', { hours: $('#wpbm-peer-hours').value }).then(function (res) {
-					$('#wpbm-peer-key').value = res.key;
-					$('#wpbm-peer-key-row').hidden = false;
-					$('#wpbm-peer-revoke').disabled = false;
-					var status = $('#wpbm-peer-status');
+				request('slice_backup_peer_key', { hours: $('#slicebk-peer-hours').value }).then(function (res) {
+					$('#slicebk-peer-key').value = res.key;
+					$('#slicebk-peer-key-row').hidden = false;
+					$('#slicebk-peer-revoke').disabled = false;
+					var status = $('#slicebk-peer-status');
 					status.textContent = '';
-					status.appendChild(el('span', { className: 'wpbm-badge wpbm-badge--warn', text: __('Active', D) }));
+					status.appendChild(el('span', { className: 'slicebk-badge slicebk-badge--warn', text: __('Active', D) }));
 					status.appendChild(document.createTextNode(' ' + sprintf(__('A transfer key is active until %s.', D), new Date(res.expires * 1000).toLocaleString())));
-					$('#wpbm-peer-key').select();
+					$('#slicebk-peer-key').select();
 				}).catch(function (error) { toast(error.message, 'error'); });
 			};
-			if ($('#wpbm-peer-revoke').disabled) {
+			if ($('#slicebk-peer-revoke').disabled) {
 				go();
 				return;
 			}
@@ -1722,20 +1722,20 @@
 				confirmLabel: __('Create new key', D)
 			}).then(function (ok) { if (ok) { go(); } });
 		});
-		$('#wpbm-peer-revoke').addEventListener('click', function () {
-			request('wpbm_peer_revoke').then(function () {
-				$('#wpbm-peer-key-row').hidden = true;
-				$('#wpbm-peer-key').value = '';
-				$('#wpbm-peer-revoke').disabled = true;
-				var status = $('#wpbm-peer-status');
+		$('#slicebk-peer-revoke').addEventListener('click', function () {
+			request('slice_backup_peer_revoke').then(function () {
+				$('#slicebk-peer-key-row').hidden = true;
+				$('#slicebk-peer-key').value = '';
+				$('#slicebk-peer-revoke').disabled = true;
+				var status = $('#slicebk-peer-status');
 				status.textContent = '';
-				status.appendChild(el('span', { className: 'wpbm-badge wpbm-badge--info', text: __('Off', D) }));
+				status.appendChild(el('span', { className: 'slicebk-badge slicebk-badge--info', text: __('Off', D) }));
 				status.appendChild(document.createTextNode(' ' + __('No transfer key. Other sites cannot connect.', D)));
 				toast(__('Transfer key revoked.', D));
 			}).catch(function (error) { toast(error.message, 'error'); });
 		});
-		$('#wpbm-peer-copy').addEventListener('click', function () {
-			var text = $('#wpbm-peer-key').value;
+		$('#slicebk-peer-copy').addEventListener('click', function () {
+			var text = $('#slicebk-peer-key').value;
 			var done = function () { toast(__('Transfer key copied.', D)); };
 			if (navigator.clipboard && window.isSecureContext) {
 				navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text); done(); });
@@ -1747,15 +1747,15 @@
 	}
 
 	/* Pull from another site */
-	var pullStart = $('#wpbm-pull-start');
+	var pullStart = $('#slicebk-pull-start');
 	if (pullStart) {
 		pullStart.addEventListener('click', function () {
-			var key = $('#wpbm-pull-key').value.trim();
-			checkPeerKey(key, $('#wpbm-pull-result'), pullStart).then(function (info) {
+			var key = $('#slicebk-pull-key').value.trim();
+			checkPeerKey(key, $('#slicebk-pull-result'), pullStart).then(function (info) {
 				if (!info || info.busy) {
 					return;
 				}
-				Jobs.start('pull', { key: key, export_type: $('#wpbm-pull-preset').value }, handlersFor('pull')).catch(function (error) {
+				Jobs.start('pull', { key: key, export_type: $('#slicebk-pull-preset').value }, handlersFor('pull')).catch(function (error) {
 					toast(error.message, 'error');
 				});
 			});
@@ -1763,20 +1763,20 @@
 	}
 
 	/* Schedule */
-	var freq = $('#wpbm-sched-frequency');
+	var freq = $('#slicebk-sched-frequency');
 	if (freq) {
-		var syncWeekday = function () { $('#wpbm-sched-weekday-field').hidden = freq.value !== 'wpbm_weekly'; };
+		var syncWeekday = function () { $('#slicebk-sched-weekday-field').hidden = freq.value !== 'slice_backup_weekly'; };
 		freq.addEventListener('change', syncWeekday);
 		syncWeekday();
 	}
-	var runNow = $('#wpbm-schedule-now');
+	var runNow = $('#slicebk-schedule-now');
 	if (runNow) {
 		runNow.addEventListener('click', function () {
 			if (Jobs.current) {
 				toast(__('Another job is running. Wait for it to finish.', D), 'error');
 				return;
 			}
-			request('wpbm_schedule_now').then(function (job) {
+			request('slice_backup_schedule_now').then(function (job) {
 				Jobs.follow(job, job.token, handlersFor('export'));
 			}).catch(function (error) { toast(error.message, 'error'); });
 		});
@@ -1793,30 +1793,30 @@
 		if (!row) {
 			return;
 		}
-		request('wpbm_probe').then(function (data) {
+		request('slice_backup_probe').then(function (data) {
 			var r = data.row;
-			row.className = 'wpbm-check-row is-' + r.status;
-			var badge = row.querySelector('.wpbm-badge');
-			badge.className = 'wpbm-badge wpbm-badge--' + r.status;
+			row.className = 'slicebk-check-row is-' + r.status;
+			var badge = row.querySelector('.slicebk-badge');
+			badge.className = 'slicebk-badge slicebk-badge--' + r.status;
 			badge.textContent = statusText[r.status] || r.status;
-			row.querySelector('.wpbm-check-row__value').textContent = r.value;
-			var help = row.querySelector('.wpbm-check-row__help');
+			row.querySelector('.slicebk-check-row__value').textContent = r.value;
+			var help = row.querySelector('.slicebk-check-row__help');
 			help.textContent = r.help || '';
 			help.hidden = !r.help;
 		}).catch(function () {
-			row.querySelector('.wpbm-check-row__value').textContent = __('Could not test', D);
+			row.querySelector('.slicebk-check-row__value').textContent = __('Could not test', D);
 		});
 	}
 
-	var copyButton = $('#wpbm-copy-report');
+	var copyButton = $('#slicebk-copy-report');
 	if (copyButton) {
 		copyButton.addEventListener('click', function () {
-			var lines = ['WP Bundle Migrator system report', cfg.siteUrl, ''];
-			$$('.wpbm-check-row').forEach(function (row) {
+			var lines = ['Slice Backup system report', cfg.siteUrl, ''];
+			$$('.slicebk-check-row').forEach(function (row) {
 				lines.push(
-					row.querySelector('.wpbm-check-row__label').textContent.trim() + ': ' +
-					row.querySelector('.wpbm-check-row__value').textContent.trim() + ' [' +
-					row.querySelector('.wpbm-badge').textContent.trim() + ']'
+					row.querySelector('.slicebk-check-row__label').textContent.trim() + ': ' +
+					row.querySelector('.slicebk-check-row__value').textContent.trim() + ' [' +
+					row.querySelector('.slicebk-badge').textContent.trim() + ']'
 				);
 			});
 			var text = lines.join('\n');

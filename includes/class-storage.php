@@ -2,12 +2,12 @@
 /**
  * Bundle storage: the protected folder, file naming, listing, locking and downloads.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -17,9 +17,9 @@ if (!defined('ABSPATH')) {
  * Manages the folder where bundles and temporary files live.
  */
 final class Storage {
-    public const DIR_NAME = 'wp-bundle-migrator-temp';
+    public const DIR_NAME = 'slice-backup-temp';
 
-    private const LOCK_OPTION = 'wpbm_lock';
+    private const LOCK_OPTION = 'slice_backup_lock';
     private const LOCK_TTL    = 7200;
 
     /** @var string|null */
@@ -42,7 +42,7 @@ final class Storage {
             throw new \RuntimeException(
                 sprintf(
                     /* translators: %s: folder path. */
-                    __('Could not create the storage folder %s. Make sure wp-content/uploads is writable.', 'wp-bundle-migrator'),
+                    __('Could not create the storage folder %s. Make sure wp-content/uploads is writable.', 'slice-backup'),
                     $dir
                 )
             );
@@ -85,7 +85,7 @@ final class Storage {
      */
     private static function protect(string $dir): void {
         $files = array(
-            '.htaccess'  => "# WP Bundle Migrator: deny all web access to backups.\n"
+            '.htaccess'  => "# Slice Backup: deny all web access to backups.\n"
                 . "<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n"
                 . "<IfModule !mod_authz_core.c>\n\tOrder deny,allow\n\tDeny from all\n</IfModule>\n",
             'web.config' => "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<configuration>\n\t<system.webServer>\n\t\t<security>\n\t\t\t<requestFiltering>\n\t\t\t\t<fileExtensions allowUnlisted=\"false\" />\n\t\t\t</requestFiltering>\n\t\t</security>\n\t</system.webServer>\n</configuration>\n",
@@ -108,7 +108,7 @@ final class Storage {
     public static function isBundleName(string $name): bool {
         return $name !== ''
             && $name === sanitize_file_name($name)
-            && preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*\.(zip|wpbundle)$/i', $name) === 1;
+            && preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*\.(zip|slicebk)$/i', $name) === 1;
     }
 
     /**
@@ -119,13 +119,13 @@ final class Storage {
      */
     public static function path(string $name): string {
         if (!self::isBundleName($name)) {
-            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'slice-backup'));
         }
         $path = self::dir() . '/' . $name;
         if (!is_file($path)) {
             throw new \RuntimeException(
                 /* translators: %s: file name. */
-                sprintf(__('Bundle not found: %s', 'wp-bundle-migrator'), $name)
+                sprintf(__('Bundle not found: %s', 'slice-backup'), $name)
             );
         }
         return $path;
@@ -328,13 +328,13 @@ final class Storage {
         $uploadId = strtolower((string) preg_replace('/[^a-zA-Z0-9]/', '', $uploadId));
         $name     = sanitize_file_name($name);
         if (strlen($uploadId) < 16 || strlen($uploadId) > 64) {
-            throw new \InvalidArgumentException(__('Invalid upload ID.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Invalid upload ID.', 'slice-backup'));
         }
-        if (!preg_match('/\.(zip|wpbundle)$/i', $name)) {
-            throw new \InvalidArgumentException(__('Only .zip and .wpbundle bundles can be uploaded.', 'wp-bundle-migrator'));
+        if (!preg_match('/\.(zip|slicebk)$/i', $name)) {
+            throw new \InvalidArgumentException(__('Only .zip and .slicebk bundles can be uploaded.', 'slice-backup'));
         }
         if ($total <= 0) {
-            throw new \InvalidArgumentException(__('The file is empty.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('The file is empty.', 'slice-backup'));
         }
 
         $part    = self::dir() . '/' . $uploadId . '.part';
@@ -357,7 +357,7 @@ final class Storage {
             $ok = file_put_contents($part, $data, FILE_APPEND) !== false; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
         }
         if (!$ok) {
-            throw new \RuntimeException(__('Could not write the uploaded data. Check free disk space.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not write the uploaded data. Check free disk space.', 'slice-backup'));
         }
 
         clearstatcache(true, $part);
@@ -367,33 +367,33 @@ final class Storage {
         }
         if ($received > $total) {
             @unlink($part); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-            throw new \RuntimeException(__('The uploaded file is larger than expected. Please upload it again.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('The uploaded file is larger than expected. Please upload it again.', 'slice-backup'));
         }
 
         if (Crypto::isEncryptedFile($part)) {
-            $name = (string) preg_replace('/\.zip$/i', '.wpbundle', $name);
+            $name = (string) preg_replace('/\.zip$/i', '.slicebk', $name);
         } else {
             if (!class_exists('ZipArchive')) {
                 @unlink($part); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-                throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'wp-bundle-migrator'));
+                throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
             }
             $zip = new \ZipArchive();
             if ($zip->open($part) !== true) {
                 @unlink($part); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-                throw new \InvalidArgumentException(__('The uploaded file is not a valid zip archive.', 'wp-bundle-migrator'));
+                throw new \InvalidArgumentException(__('The uploaded file is not a valid zip archive.', 'slice-backup'));
             }
             $hasContent = $zip->locateName('bundle.json') !== false || $zip->locateName('database.sql') !== false;
             $zip->close();
             if (!$hasContent) {
                 @unlink($part); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-                throw new \InvalidArgumentException(__('This zip file is not a WP Bundle Migrator bundle (bundle.json is missing).', 'wp-bundle-migrator'));
+                throw new \InvalidArgumentException(__('This zip file is not a Slice Backup bundle (bundle.json is missing).', 'slice-backup'));
             }
-            $name = (string) preg_replace('/\.wpbundle$/i', '.zip', $name);
+            $name = (string) preg_replace('/\.slicebk$/i', '.zip', $name);
         }
 
         $final = wp_unique_filename(self::dir(), $name);
         if (!rename($part, self::dir() . '/' . $final)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename
-            throw new \RuntimeException(__('Could not save the uploaded bundle.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not save the uploaded bundle.', 'slice-backup'));
         }
         return array('complete' => true, 'filename' => $final);
     }
@@ -407,7 +407,7 @@ final class Storage {
         $path   = self::path($name);
         $handle = fopen($path, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not read the bundle.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not read the bundle.', 'slice-backup'));
         }
         Crypto::seek($handle, $offset);
         $data = (string) fread($handle, max(1, min($length, 16777216))); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
@@ -421,7 +421,7 @@ final class Storage {
     private static function isOwnName(string $name): bool {
         $host = (string) wp_parse_url(home_url(), PHP_URL_HOST);
         $slug = sanitize_title($host !== '' ? $host : 'site');
-        return (bool) preg_match('/^' . preg_quote($slug, '/') . '-[a-z0-9-]+-\d{8}-\d{6}-[a-z0-9]{12}\.(zip|wpbundle)$/', $name);
+        return (bool) preg_match('/^' . preg_quote($slug, '/') . '-[a-z0-9-]+-\d{8}-\d{6}-[a-z0-9]{12}\.(zip|slicebk)$/', $name);
     }
 
     /**
@@ -480,7 +480,7 @@ final class Storage {
         }
 
         if (!add_site_option(self::LOCK_OPTION, array('op' => $operation, 'time' => time()))) {
-            throw new \RuntimeException(__('Another backup or restore is already running. Wait for it to finish, then try again.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Another backup or restore is already running. Wait for it to finish, then try again.', 'slice-backup'));
         }
     }
 
@@ -497,9 +497,9 @@ final class Storage {
     public static function downloadUrl(string $name): string {
         return add_query_arg(
             array(
-                'action' => 'wpbm_download',
+                'action' => 'slice_backup_download',
                 'file'   => rawurlencode($name),
-                'nonce'  => wp_create_nonce('wpbm_download'),
+                'nonce'  => wp_create_nonce('slice_backup_download'),
             ),
             admin_url('admin-ajax.php')
         );
@@ -539,7 +539,7 @@ final class Storage {
      */
     public static function streamFile(string $filePath): void {
         if (!is_file($filePath) || !is_readable($filePath)) {
-            wp_die(esc_html__('The requested bundle does not exist or cannot be read.', 'wp-bundle-migrator'), '', array('response' => 404));
+            wp_die(esc_html__('The requested bundle does not exist or cannot be read.', 'slice-backup'), '', array('response' => 404));
         }
 
         if (session_status() === PHP_SESSION_ACTIVE) {
@@ -561,7 +561,7 @@ final class Storage {
         $fileSize = self::filesize($filePath);
         $fp       = fopen($filePath, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$fp) {
-            wp_die(esc_html__('Unable to open the bundle for reading.', 'wp-bundle-migrator'), '', array('response' => 500));
+            wp_die(esc_html__('Unable to open the bundle for reading.', 'slice-backup'), '', array('response' => 500));
         }
 
         $start   = 0.0;

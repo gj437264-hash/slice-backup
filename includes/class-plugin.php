@@ -2,12 +2,12 @@
 /**
  * Plugin bootstrap: hooks, admin page, assets, settings and capability checks.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -17,10 +17,10 @@ if (!defined('ABSPATH')) {
  * Main plugin class.
  */
 final class Plugin {
-    public const OPTION_SETTINGS   = 'wpbm_settings';
-    public const OPTION_REPORT     = 'wpbm_last_report';
-    public const OPTION_DB_VERSION = 'wpbm_db_version';
-    public const PAGE_SLUG         = 'wp-bundle-migrator';
+    public const OPTION_SETTINGS   = 'slice_backup_settings';
+    public const OPTION_REPORT     = 'slice_backup_last_report';
+    public const OPTION_DB_VERSION = 'slice_backup_db_version';
+    public const PAGE_SLUG         = 'slice-backup';
 
     /** @var string */
     private static $hookSuffix = '';
@@ -35,7 +35,7 @@ final class Plugin {
         add_action(is_multisite() ? 'network_admin_menu' : 'admin_menu', array(__CLASS__, 'registerMenu'));
         add_action('admin_enqueue_scripts', array(__CLASS__, 'enqueueAssets'));
 
-        $basename = plugin_basename(WPBM_FILE);
+        $basename = plugin_basename(SLICE_BACKUP_FILE);
         add_filter((is_multisite() ? 'network_admin_' : '') . 'plugin_action_links_' . $basename, array(__CLASS__, 'actionLinks'));
 
         AjaxController::init();
@@ -43,7 +43,7 @@ final class Plugin {
         Scheduler::init();
 
         if (defined('WP_CLI') && WP_CLI && class_exists(CliCommand::class)) {
-            \WP_CLI::add_command('bundle', CliCommand::class);
+            \WP_CLI::add_command('slice-backup', CliCommand::class);
         }
     }
 
@@ -69,7 +69,7 @@ final class Plugin {
     }
 
     public static function loadTextdomain(): void {
-        load_plugin_textdomain('wp-bundle-migrator', false, dirname(plugin_basename(WPBM_FILE)) . '/languages');
+        load_plugin_textdomain('slice-backup', false, dirname(plugin_basename(SLICE_BACKUP_FILE)) . '/languages');
     }
 
     /**
@@ -78,7 +78,7 @@ final class Plugin {
      */
     public static function capability(): string {
         $default = is_multisite() ? 'manage_network_options' : 'manage_options';
-        return (string) apply_filters('wpbm_required_capability', $default);
+        return (string) apply_filters('slice_backup_required_capability', $default);
     }
 
     public static function currentUserCan(): bool {
@@ -93,12 +93,12 @@ final class Plugin {
     }
 
     public static function registerMenu(): void {
-        $title = __('WP Bundle Migrator', 'wp-bundle-migrator');
+        $title = __('Slice Backup', 'slice-backup');
 
         if (is_multisite()) {
-            self::$hookSuffix = (string) add_menu_page($title, __('Bundle Migrator', 'wp-bundle-migrator'), self::capability(), self::PAGE_SLUG, array(__CLASS__, 'renderPage'), 'dashicons-migrate', 81);
+            self::$hookSuffix = (string) add_menu_page($title, __('Slice Backup', 'slice-backup'), self::capability(), self::PAGE_SLUG, array(__CLASS__, 'renderPage'), 'dashicons-migrate', 81);
         } else {
-            self::$hookSuffix = (string) add_management_page($title, __('Bundle Migrator', 'wp-bundle-migrator'), self::capability(), self::PAGE_SLUG, array(__CLASS__, 'renderPage'));
+            self::$hookSuffix = (string) add_management_page($title, __('Slice Backup', 'slice-backup'), self::capability(), self::PAGE_SLUG, array(__CLASS__, 'renderPage'));
         }
     }
 
@@ -107,17 +107,17 @@ final class Plugin {
      * @return string[]
      */
     public static function actionLinks(array $links): array {
-        array_unshift($links, sprintf('<a href="%s">%s</a>', esc_url(self::adminUrl()), esc_html__('Open', 'wp-bundle-migrator')));
+        array_unshift($links, sprintf('<a href="%s">%s</a>', esc_url(self::adminUrl()), esc_html__('Open', 'slice-backup')));
         return $links;
     }
 
     public static function renderPage(): void {
         if (!self::currentUserCan()) {
-            wp_die(esc_html__('You do not have permission to access this page.', 'wp-bundle-migrator'), '', array('response' => 403));
+            wp_die(esc_html__('You do not have permission to access this page.', 'slice-backup'), '', array('response' => 403));
         }
 
         $view = self::viewData();
-        require WPBM_PATH . 'views/admin-page.php';
+        require SLICE_BACKUP_PATH . 'views/admin-page.php';
     }
 
     public static function enqueueAssets(string $hook): void {
@@ -125,13 +125,13 @@ final class Plugin {
             return;
         }
 
-        wp_enqueue_style('wpbm-admin', WPBM_URL . 'assets/css/admin.css', array('dashicons'), WPBM_VERSION);
-        wp_enqueue_script('wpbm-admin', WPBM_URL . 'assets/js/admin.js', array('wp-i18n'), WPBM_VERSION, true);
-        wp_set_script_translations('wpbm-admin', 'wp-bundle-migrator', WPBM_PATH . 'languages');
+        wp_enqueue_style('slicebk-admin', SLICE_BACKUP_URL . 'assets/css/admin.css', array('dashicons'), SLICE_BACKUP_VERSION);
+        wp_enqueue_script('slicebk-admin', SLICE_BACKUP_URL . 'assets/js/admin.js', array('wp-i18n'), SLICE_BACKUP_VERSION, true);
+        wp_set_script_translations('slicebk-admin', 'slice-backup', SLICE_BACKUP_PATH . 'languages');
 
         $config = array(
             'ajaxUrl'       => admin_url('admin-ajax.php'),
-            'nonce'         => wp_create_nonce('wpbm_admin'),
+            'nonce'         => wp_create_nonce('slice_backup_admin'),
             'siteUrl'       => untrailingslashit((string) get_option('siteurl')),
             'homeUrl'       => untrailingslashit(home_url()),
             'loginUrl'      => wp_login_url(self::adminUrl()),
@@ -147,7 +147,7 @@ final class Plugin {
             'pollSeconds'   => 2,
         );
 
-        wp_add_inline_script('wpbm-admin', 'window.wpbmConfig = ' . wp_json_encode($config) . ';', 'before');
+        wp_add_inline_script('slicebk-admin', 'window.sliceBackupConfig = ' . wp_json_encode($config) . ';', 'before');
     }
 
     /**
@@ -169,43 +169,43 @@ final class Plugin {
     public static function components(): array {
         return array(
             'db'         => array(
-                'label'       => __('Database', 'wp-bundle-migrator'),
-                'description' => __('Posts, pages, users, settings and plugin data', 'wp-bundle-migrator'),
+                'label'       => __('Database', 'slice-backup'),
+                'description' => __('Posts, pages, users, settings and plugin data', 'slice-backup'),
                 'icon'        => 'dashicons-database',
             ),
             'uploads'    => array(
-                'label'       => __('Media library', 'wp-bundle-migrator'),
-                'description' => __('Everything in wp-content/uploads', 'wp-bundle-migrator'),
+                'label'       => __('Media library', 'slice-backup'),
+                'description' => __('Everything in wp-content/uploads', 'slice-backup'),
                 'icon'        => 'dashicons-format-image',
             ),
             'plugins'    => array(
-                'label'       => __('Plugins', 'wp-bundle-migrator'),
-                'description' => __('wp-content/plugins (this plugin is left out)', 'wp-bundle-migrator'),
+                'label'       => __('Plugins', 'slice-backup'),
+                'description' => __('wp-content/plugins (this plugin is left out)', 'slice-backup'),
                 'icon'        => 'dashicons-admin-plugins',
             ),
             'themes'     => array(
-                'label'       => __('Themes', 'wp-bundle-migrator'),
-                'description' => __('wp-content/themes', 'wp-bundle-migrator'),
+                'label'       => __('Themes', 'slice-backup'),
+                'description' => __('wp-content/themes', 'slice-backup'),
                 'icon'        => 'dashicons-admin-appearance',
             ),
             'mu_plugins' => array(
-                'label'       => __('Must-use plugins', 'wp-bundle-migrator'),
-                'description' => __('wp-content/mu-plugins', 'wp-bundle-migrator'),
+                'label'       => __('Must-use plugins', 'slice-backup'),
+                'description' => __('wp-content/mu-plugins', 'slice-backup'),
                 'icon'        => 'dashicons-admin-generic',
             ),
             'languages'  => array(
-                'label'       => __('Translations', 'wp-bundle-migrator'),
-                'description' => __('wp-content/languages', 'wp-bundle-migrator'),
+                'label'       => __('Translations', 'slice-backup'),
+                'description' => __('wp-content/languages', 'slice-backup'),
                 'icon'        => 'dashicons-translation',
             ),
             'root_files' => array(
-                'label'       => __('Server config files', 'wp-bundle-migrator'),
-                'description' => __('wp-config.php, .htaccess, robots.txt and similar', 'wp-bundle-migrator'),
+                'label'       => __('Server config files', 'slice-backup'),
+                'description' => __('wp-config.php, .htaccess, robots.txt and similar', 'slice-backup'),
                 'icon'        => 'dashicons-media-code',
             ),
             'wp_core'    => array(
-                'label'       => __('WordPress core', 'wp-bundle-migrator'),
-                'description' => __('wp-admin and wp-includes. Not needed if the destination already runs WordPress', 'wp-bundle-migrator'),
+                'label'       => __('WordPress core', 'slice-backup'),
+                'description' => __('wp-admin and wp-includes. Not needed if the destination already runs WordPress', 'slice-backup'),
                 'icon'        => 'dashicons-wordpress',
             ),
         );
@@ -235,7 +235,7 @@ final class Plugin {
                 'endpoint'          => '',
                 'account_id'        => '',
                 'path_style'        => true,
-                'path'              => 'wp-bundle-migrator/' . sanitize_title($host !== '' ? $host : 'site'),
+                'path'              => 'slice-backup/' . sanitize_title($host !== '' ? $host : 'site'),
                 'auto_upload'       => false,
                 'delete_local'      => false,
                 // SFTP.
@@ -326,7 +326,7 @@ final class Plugin {
                     $s['encryption']['passphrase_sealed'] = '';
                 } elseif ($passphrase !== '') {
                     if (strlen($passphrase) < 8) {
-                        throw new \InvalidArgumentException(__('The passphrase must be at least 8 characters.', 'wp-bundle-migrator'));
+                        throw new \InvalidArgumentException(__('The passphrase must be at least 8 characters.', 'slice-backup'));
                     }
                     $s['encryption']['passphrase_sealed'] = Crypto::seal($passphrase);
                 }
@@ -413,10 +413,10 @@ final class Plugin {
                     'webhook'      => $webhook,
                 );
                 if ($s['schedule']['enabled'] && $s['schedule']['encrypt'] && self::storedPassphrase() === '') {
-                    throw new \InvalidArgumentException(__('Save an encryption passphrase under Settings > Encryption before scheduling encrypted backups.', 'wp-bundle-migrator'));
+                    throw new \InvalidArgumentException(__('Save an encryption passphrase under Settings > Encryption before scheduling encrypted backups.', 'slice-backup'));
                 }
                 if ($s['schedule']['enabled'] && $s['schedule']['upload'] && !Cloud::isConfigured()) {
-                    throw new \InvalidArgumentException(__('Set up cloud storage before scheduling uploads.', 'wp-bundle-migrator'));
+                    throw new \InvalidArgumentException(__('Set up cloud storage before scheduling uploads.', 'slice-backup'));
                 }
                 break;
         }
@@ -429,12 +429,12 @@ final class Plugin {
     }
 
     /**
-     * The saved encryption passphrase. A WPBM_ENCRYPTION_PASSPHRASE constant in
+     * The saved encryption passphrase. A SLICE_BACKUP_ENCRYPTION_PASSPHRASE constant in
      * wp-config.php takes precedence, so the passphrase need not be in the database.
      */
     public static function storedPassphrase(): string {
-        if (defined('WPBM_ENCRYPTION_PASSPHRASE') && is_string(WPBM_ENCRYPTION_PASSPHRASE) && WPBM_ENCRYPTION_PASSPHRASE !== '') {
-            return WPBM_ENCRYPTION_PASSPHRASE;
+        if (defined('SLICE_BACKUP_ENCRYPTION_PASSPHRASE') && is_string(SLICE_BACKUP_ENCRYPTION_PASSPHRASE) && SLICE_BACKUP_ENCRYPTION_PASSPHRASE !== '') {
+            return SLICE_BACKUP_ENCRYPTION_PASSPHRASE;
         }
         return Crypto::open((string) self::settings()['encryption']['passphrase_sealed']);
     }
@@ -447,7 +447,7 @@ final class Plugin {
     public static function publicSettings(): array {
         $s = self::settings();
         $s['encryption']['has_passphrase']  = self::storedPassphrase() !== '';
-        $s['encryption']['from_constant']   = defined('WPBM_ENCRYPTION_PASSPHRASE');
+        $s['encryption']['from_constant']   = defined('SLICE_BACKUP_ENCRYPTION_PASSPHRASE');
         $has = static function (string $sealed): bool {
             return $sealed !== '' && Crypto::open($sealed) !== '';
         };
@@ -548,27 +548,12 @@ final class Plugin {
      * One-time data migrations between versions.
      */
     private static function maybeUpgrade(): void {
-        if (get_site_option(self::OPTION_DB_VERSION) === WPBM_VERSION) {
+        if (get_site_option(self::OPTION_DB_VERSION) === SLICE_BACKUP_VERSION) {
             return;
         }
 
-        // 1.0.x kept settings (including plaintext cloud credentials for features that were
-        // never implemented) in per-site options. Keep the two real settings, drop the rest.
-        $legacy = get_option('wp_bundle_migrator_settings');
-        if (is_array($legacy) && get_site_option(self::OPTION_SETTINGS) === false) {
-            self::saveSettings(
-                array(
-                    'chunk_size'      => $legacy['chunk_size'] ?? 2500,
-                    'retention_count' => $legacy['retention_count'] ?? 5,
-                )
-            );
-        }
-        foreach (array('wp_bundle_migrator_settings', 'wp_bundle_active_extensions', 'wp_bundle_migrator_last_conflict_report') as $option) {
-            delete_option($option);
-            delete_site_option($option);
-        }
-        delete_transient('wp_bundle_migrator_lock');
+        // Future data migrations between versions go here.
 
-        update_site_option(self::OPTION_DB_VERSION, WPBM_VERSION);
+        update_site_option(self::OPTION_DB_VERSION, SLICE_BACKUP_VERSION);
     }
 }

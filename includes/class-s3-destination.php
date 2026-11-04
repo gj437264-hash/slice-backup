@@ -2,12 +2,12 @@
 /**
  * S3-compatible destination (Amazon S3, R2, Google Cloud Storage, Wasabi, B2, Spaces, MinIO).
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -37,12 +37,12 @@ final class S3Destination implements Destination {
         $providers = Cloud::providers();
         $provider  = $providers[$config['provider']] ?? null;
         if ($provider === null || ($provider['kind'] ?? '') !== 's3') {
-            throw new \InvalidArgumentException(__('Choose a storage provider.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Choose a storage provider.', 'slice-backup'));
         }
-        foreach (array('bucket' => __('bucket', 'wp-bundle-migrator'), 'access_key' => __('access key', 'wp-bundle-migrator'), 'secret_key' => __('secret key', 'wp-bundle-migrator')) as $field => $label) {
+        foreach (array('bucket' => __('bucket', 'slice-backup'), 'access_key' => __('access key', 'slice-backup'), 'secret_key' => __('secret key', 'slice-backup')) as $field => $label) {
             if (trim((string) ($config[$field] ?? '')) === '') {
                 /* translators: %s: field name. */
-                throw new \InvalidArgumentException(sprintf(__('The %s is missing.', 'wp-bundle-migrator'), $label));
+                throw new \InvalidArgumentException(sprintf(__('The %s is missing.', 'slice-backup'), $label));
             }
         }
 
@@ -52,16 +52,16 @@ final class S3Destination implements Destination {
         if ($config['provider'] === 'r2') {
             $account = (string) preg_replace('/[^a-f0-9]/', '', strtolower((string) $config['account_id']));
             if ($account === '') {
-                throw new \InvalidArgumentException(__('The Cloudflare account ID is missing.', 'wp-bundle-migrator'));
+                throw new \InvalidArgumentException(__('The Cloudflare account ID is missing.', 'slice-backup'));
             }
             $endpoint = str_replace('{account}', $account, $endpoint);
         }
         $endpoint = str_replace('{region}', rawurlencode($region), $endpoint);
         if ($endpoint === '' || !preg_match('#^https?://#i', $endpoint)) {
-            throw new \InvalidArgumentException(__('Enter the endpoint URL of your storage server, for example https://minio.example.com:9000', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Enter the endpoint URL of your storage server, for example https://minio.example.com:9000', 'slice-backup'));
         }
         if (!$isCustom && !wp_http_validate_url($endpoint)) {
-            throw new \InvalidArgumentException(__('The storage endpoint is not a valid URL.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('The storage endpoint is not a valid URL.', 'slice-backup'));
         }
 
         $this->bucket = trim((string) $config['bucket']);
@@ -78,8 +78,8 @@ final class S3Destination implements Destination {
     }
 
     public function test(): string {
-        $key = $this->prefix . '.wpbm-connection-test-' . strtolower(wp_generate_password(8, false));
-        $this->client->putObject($key, 'WP Bundle Migrator connection test', 'text/plain');
+        $key = $this->prefix . '.slicebk-connection-test-' . strtolower(wp_generate_password(8, false));
+        $this->client->putObject($key, 'Slice Backup connection test', 'text/plain');
         $found = false;
         foreach ($this->client->listObjects($key) as $item) {
             if ($item['key'] === $key) {
@@ -88,11 +88,11 @@ final class S3Destination implements Destination {
         }
         $this->client->deleteObject($key);
         if (!$found) {
-            throw new \RuntimeException(__('The test file was written but did not show up in the bucket listing. Check the key\'s list permission.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('The test file was written but did not show up in the bucket listing. Check the key\'s list permission.', 'slice-backup'));
         }
         return sprintf(
             /* translators: 1: provider name, 2: bucket name. */
-            __('Connected to %1$s bucket "%2$s". Writing, listing and deleting files all work.', 'wp-bundle-migrator'),
+            __('Connected to %1$s bucket "%2$s". Writing, listing and deleting files all work.', 'slice-backup'),
             $this->label,
             $this->bucket
         );
@@ -129,7 +129,7 @@ final class S3Destination implements Destination {
 
         $handle = fopen($path, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not read the bundle for uploading.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not read the bundle for uploading.', 'slice-backup'));
         }
         $client = $this->client;
         try {
@@ -178,7 +178,7 @@ final class S3Destination implements Destination {
             $size = $client->headObject($key);
             if ($size === null) {
                 /* translators: %s: file name. */
-                throw new \RuntimeException(sprintf(__('%s was not found in cloud storage.', 'wp-bundle-migrator'), $filename));
+                throw new \RuntimeException(sprintf(__('%s was not found in cloud storage.', 'slice-backup'), $filename));
             }
             file_put_contents($target, ''); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
             $state = array('size' => $size, 'offset' => 0.0);

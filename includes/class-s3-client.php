@@ -4,12 +4,12 @@
  * Works with Amazon S3, Cloudflare R2, Google Cloud Storage (HMAC keys), Wasabi,
  * Backblaze B2, DigitalOcean Spaces and MinIO.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -67,7 +67,7 @@ final class S3Client {
         if (is_wp_error($response)) {
             throw new \RuntimeException(
                 /* translators: %s: error message. */
-                sprintf(__('Could not connect to the storage service: %s', 'wp-bundle-migrator'), $response->get_error_message())
+                sprintf(__('Could not connect to the storage service: %s', 'slice-backup'), $response->get_error_message())
             );
         }
 
@@ -170,19 +170,19 @@ final class S3Client {
             }
         }
         $hints = array(
-            'InvalidAccessKeyId'    => __('The access key ID is wrong.', 'wp-bundle-migrator'),
-            'SignatureDoesNotMatch' => __('The secret key is wrong (or the region does not match the bucket).', 'wp-bundle-migrator'),
-            'NoSuchBucket'          => __('The bucket does not exist.', 'wp-bundle-migrator'),
-            'AccessDenied'          => __('Access denied. Give the key permission to list, read, write and delete objects in this bucket.', 'wp-bundle-migrator'),
-            'AuthorizationHeaderMalformed' => __('The region is wrong for this bucket.', 'wp-bundle-migrator'),
-            'PermanentRedirect'     => __('The bucket is in a different region. Set the correct region.', 'wp-bundle-migrator'),
+            'InvalidAccessKeyId'    => __('The access key ID is wrong.', 'slice-backup'),
+            'SignatureDoesNotMatch' => __('The secret key is wrong (or the region does not match the bucket).', 'slice-backup'),
+            'NoSuchBucket'          => __('The bucket does not exist.', 'slice-backup'),
+            'AccessDenied'          => __('Access denied. Give the key permission to list, read, write and delete objects in this bucket.', 'slice-backup'),
+            'AuthorizationHeaderMalformed' => __('The region is wrong for this bucket.', 'slice-backup'),
+            'PermanentRedirect'     => __('The bucket is in a different region. Set the correct region.', 'slice-backup'),
         );
         $hint = $hints[$code] ?? '';
         $text = trim($code . ($message !== '' ? ': ' . $message : ''));
 
         return sprintf(
             /* translators: 1: HTTP status, 2: error details. */
-            __('Storage service error (HTTP %1$d) %2$s', 'wp-bundle-migrator'),
+            __('Storage service error (HTTP %1$d) %2$s', 'slice-backup'),
             $response['code'],
             trim($hint . ' ' . ($text !== '' ? '[' . $text . ']' : ''))
         );
@@ -237,7 +237,7 @@ final class S3Client {
             self::expectOk($response);
             $xml = self::xml($response['body']);
             if ($xml === null) {
-                throw new \RuntimeException(__('The storage service returned an unreadable listing.', 'wp-bundle-migrator'));
+                throw new \RuntimeException(__('The storage service returned an unreadable listing.', 'slice-backup'));
             }
             $last = '';
             foreach ($xml->Contents as $object) {
@@ -284,7 +284,7 @@ final class S3Client {
         $xml = self::xml($response['body']);
         $id  = $xml !== null ? (string) $xml->UploadId : '';
         if ($id === '') {
-            throw new \RuntimeException(__('The storage service did not start the upload.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('The storage service did not start the upload.', 'slice-backup'));
         }
         return $id;
     }
@@ -294,7 +294,7 @@ final class S3Client {
         self::expectOk($response);
         $etag = $response['headers']['etag'] ?? '';
         if ($etag === '') {
-            throw new \RuntimeException(__('The storage service did not confirm an uploaded part.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('The storage service did not confirm an uploaded part.', 'slice-backup'));
         }
         return $etag;
     }

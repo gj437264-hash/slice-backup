@@ -2,12 +2,12 @@
 /**
  * Scheduled backups, GFS retention and notifications.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -17,8 +17,8 @@ if (!defined('ABSPATH')) {
  * Runs backups on a schedule through WP-Cron.
  */
 final class Scheduler {
-    public const HOOK         = 'wpbm_scheduled_backup';
-    public const OPTION_LAST  = 'wpbm_schedule_last';
+    public const HOOK         = 'slice_backup_scheduled_backup';
+    public const OPTION_LAST  = 'slice_backup_schedule_last';
 
     public static function init(): void {
         add_filter('cron_schedules', array(__CLASS__, 'intervals')); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected
@@ -31,8 +31,8 @@ final class Scheduler {
      * @return array<string, array<string, mixed>>
      */
     public static function intervals(array $schedules): array {
-        $schedules['wpbm_weekly']  = array('interval' => WEEK_IN_SECONDS, 'display' => __('Once a week', 'wp-bundle-migrator'));
-        $schedules['wpbm_monthly'] = array('interval' => 30 * DAY_IN_SECONDS, 'display' => __('Once every 30 days', 'wp-bundle-migrator'));
+        $schedules['slice_backup_weekly']  = array('interval' => WEEK_IN_SECONDS, 'display' => __('Once a week', 'slice-backup'));
+        $schedules['slice_backup_monthly'] = array('interval' => 30 * DAY_IN_SECONDS, 'display' => __('Once every 30 days', 'slice-backup'));
         return $schedules;
     }
 
@@ -41,10 +41,10 @@ final class Scheduler {
      */
     public static function frequencies(): array {
         return array(
-            'twicedaily'   => __('Every 12 hours', 'wp-bundle-migrator'),
-            'daily'        => __('Daily', 'wp-bundle-migrator'),
-            'wpbm_weekly'  => __('Weekly', 'wp-bundle-migrator'),
-            'wpbm_monthly' => __('Monthly', 'wp-bundle-migrator'),
+            'twicedaily'   => __('Every 12 hours', 'slice-backup'),
+            'daily'        => __('Daily', 'slice-backup'),
+            'slice_backup_weekly'  => __('Weekly', 'slice-backup'),
+            'slice_backup_monthly' => __('Monthly', 'slice-backup'),
         );
     }
 
@@ -71,7 +71,7 @@ final class Scheduler {
         list($h, $m) = array_map('intval', explode(':', (string) $schedule['time'] . ':0'));
         $next = $now->setTime($h, $m);
 
-        if ($schedule['frequency'] === 'wpbm_weekly') {
+        if ($schedule['frequency'] === 'slice_backup_weekly') {
             $days = ((int) $schedule['weekday'] - (int) $next->format('w') + 7) % 7;
             $next = $next->modify('+' . $days . ' days');
             if ($next <= $now) {
@@ -110,7 +110,7 @@ final class Scheduler {
             $job = MigratorEngine::startExport($options, 'schedule');
         } catch (\Throwable $e) {
             update_site_option(self::OPTION_LAST, array('time' => time(), 'status' => 'failed', 'error' => $e->getMessage(), 'file' => ''));
-            Notifier::send(false, __('The scheduled backup could not start.', 'wp-bundle-migrator') . ' ' . $e->getMessage(), array());
+            Notifier::send(false, __('The scheduled backup could not start.', 'slice-backup') . ' ' . $e->getMessage(), array());
             return;
         }
 

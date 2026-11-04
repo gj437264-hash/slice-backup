@@ -6,12 +6,12 @@
  * Every request is signed with HMAC-SHA256 over the method, route, timestamp, a random nonce
  * and the body hash; requests older than 5 minutes or with a reused nonce are rejected.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
  * Transfer keys, request signing and the HTTP client for site-to-site transfers.
  */
 final class Peer {
-    public const PREFIX      = 'wpbm1.';
+    public const PREFIX      = 'slicebk1.';
     private const MAX_SKEW   = 300;
     public const CHUNK       = 8388608;
 
@@ -68,12 +68,12 @@ final class Peer {
     public static function parseKey(string $key): array {
         $key = trim(preg_replace('/\s+/', '', $key) ?? '');
         if (strpos($key, self::PREFIX) !== 0) {
-            throw new \InvalidArgumentException(__('This is not a transfer key. Generate one on the other site under Settings > Site-to-site transfer.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('This is not a transfer key. Generate one on the other site under Settings > Site-to-site transfer.', 'slice-backup'));
         }
         $json = base64_decode(strtr(substr($key, strlen(self::PREFIX)), '-_', '+/'), true); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
         $data = is_string($json) ? json_decode($json, true) : null;
         if (!is_array($data) || empty($data['u']) || empty($data['k']) || empty($data['s']) || !wp_http_validate_url((string) $data['u']) && !preg_match('#^https?://#', (string) $data['u'])) {
-            throw new \InvalidArgumentException(__('The transfer key is damaged. Copy it again.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('The transfer key is damaged. Copy it again.', 'slice-backup'));
         }
         return array('url' => trailingslashit((string) $data['u']), 'id' => (string) $data['k'], 'secret' => (string) $data['s']);
     }
@@ -87,42 +87,42 @@ final class Peer {
      */
     public static function verify(\WP_REST_Request $request) {
         $deny = static function (string $message) {
-            return new \WP_Error('wpbm_peer_denied', $message, array('status' => 403));
+            return new \WP_Error('slice_backup_peer_denied', $message, array('status' => 403));
         };
 
         $peer = Plugin::settings()['peer'];
         if (empty($peer['receive_enabled']) || (string) $peer['key_id'] === '') {
-            return $deny(__('Site-to-site transfers are not enabled on this site.', 'wp-bundle-migrator'));
+            return $deny(__('Site-to-site transfers are not enabled on this site.', 'slice-backup'));
         }
         if ((int) $peer['expires'] < time()) {
-            return $deny(__('The transfer key has expired. Generate a new one on this site.', 'wp-bundle-migrator'));
+            return $deny(__('The transfer key has expired. Generate a new one on this site.', 'slice-backup'));
         }
 
-        $id        = (string) $request->get_header('x_wpbm_key');
-        $timestamp = (int) $request->get_header('x_wpbm_time');
-        $nonce     = (string) $request->get_header('x_wpbm_nonce');
-        $signature = (string) $request->get_header('x_wpbm_signature');
+        $id        = (string) $request->get_header('x_slice_backup_key');
+        $timestamp = (int) $request->get_header('x_slice_backup_time');
+        $nonce     = (string) $request->get_header('x_slice_backup_nonce');
+        $signature = (string) $request->get_header('x_slice_backup_signature');
 
         if (!hash_equals((string) $peer['key_id'], $id)) {
-            return $deny(__('Unknown transfer key.', 'wp-bundle-migrator'));
+            return $deny(__('Unknown transfer key.', 'slice-backup'));
         }
         if (abs(time() - $timestamp) > self::MAX_SKEW) {
-            return $deny(__('The request is too old or the two servers\' clocks differ by more than 5 minutes.', 'wp-bundle-migrator'));
+            return $deny(__('The request is too old or the two servers\' clocks differ by more than 5 minutes.', 'slice-backup'));
         }
         if (!preg_match('/^[A-Za-z0-9_-]{16,64}$/', $nonce)) {
-            return $deny(__('Invalid request.', 'wp-bundle-migrator'));
+            return $deny(__('Invalid request.', 'slice-backup'));
         }
 
         $secret   = Crypto::open((string) $peer['secret_sealed']);
         $expected = self::signature($secret, $request->get_method(), self::routeName($request->get_route()), $timestamp, $nonce, (string) $request->get_body(), self::canonicalQuery($request->get_query_params()));
         if ($secret === '' || !hash_equals($expected, $signature)) {
-            return $deny(__('Invalid transfer signature. Check that the key was copied completely.', 'wp-bundle-migrator'));
+            return $deny(__('Invalid transfer signature. Check that the key was copied completely.', 'slice-backup'));
         }
 
         // Single use: a captured request cannot be replayed.
-        $seen = 'wpbm_peer_n_' . md5($nonce);
+        $seen = 'slice_backup_peer_n_' . md5($nonce);
         if (get_site_transient($seen)) {
-            return $deny(__('This request was already used.', 'wp-bundle-migrator'));
+            return $deny(__('This request was already used.', 'slice-backup'));
         }
         set_site_transient($seen, 1, 2 * self::MAX_SKEW);
 
@@ -168,10 +168,10 @@ final class Peer {
         $nonce     = self::b64url(random_bytes(18));
         $qs        = self::canonicalQuery($query);
         $headers   = array(
-            'X-WPBM-Key'       => $key['id'],
-            'X-WPBM-Time'      => (string) $timestamp,
-            'X-WPBM-Nonce'     => $nonce,
-            'X-WPBM-Signature' => self::signature($key['secret'], 'POST', $route, $timestamp, $nonce, $body, $qs),
+            'X-Slice-Backup-Key'       => $key['id'],
+            'X-Slice-Backup-Time'      => (string) $timestamp,
+            'X-Slice-Backup-Nonce'     => $nonce,
+            'X-Slice-Backup-Signature' => self::signature($key['secret'], 'POST', $route, $timestamp, $nonce, $body, $qs),
             'Content-Type'     => $raw ? 'application/octet-stream' : 'application/json',
         );
         $url = $key['url'] . 'peer/' . $route . ($qs !== '' ? '?' . $qs : '');
@@ -183,13 +183,13 @@ final class Peer {
                 'redirection' => 0,
                 'headers'     => $headers,
                 'body'        => $body,
-                'sslverify'   => (bool) apply_filters('wpbm_peer_sslverify', true),
+                'sslverify'   => (bool) apply_filters('slice_backup_peer_sslverify', true),
             )
         );
         if (is_wp_error($response)) {
             throw new PeerError(
                 /* translators: %s: error. */
-                sprintf(__('Could not reach the other site: %s', 'wp-bundle-migrator'), $response->get_error_message()),
+                sprintf(__('Could not reach the other site: %s', 'slice-backup'), $response->get_error_message()),
                 0
             );
         }
@@ -205,11 +205,11 @@ final class Peer {
 
         $message = $isJson ? (string) ($json['message'] ?? '') : '';
         if ($code === 404 && $message === '') {
-            $message = __('The other site does not have WP Bundle Migrator 1.2 or newer active, or its REST API is blocked.', 'wp-bundle-migrator');
+            $message = __('The other site does not have Slice Backup 1.2 or newer active, or its REST API is blocked.', 'slice-backup');
         }
         throw new PeerError(
             /* translators: 1: HTTP status, 2: message. */
-            sprintf(__('The other site refused the request (HTTP %1$d): %2$s', 'wp-bundle-migrator'), $code, $message !== '' ? $message : wp_strip_all_tags(substr($text, 0, 200))),
+            sprintf(__('The other site refused the request (HTTP %1$d): %2$s', 'slice-backup'), $code, $message !== '' ? $message : wp_strip_all_tags(substr($text, 0, 200))),
             $code,
             $isJson ? $json : array()
         );

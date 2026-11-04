@@ -1,10 +1,10 @@
-=== WP Bundle Migrator ===
+=== Slice Backup – Backup, Restore & Migration ===
 Contributors: wpengineers
 Tags: backup, migration, restore, cloud backup, encryption
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.3.0
+Stable tag: 1.0.0-beta
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -12,7 +12,7 @@ Back up, move and restore WordPress sites. Encrypted, scheduled, sent to your ow
 
 == Description ==
 
-WP Bundle Migrator packs your site into a single bundle that you can keep as a backup, send to your own cloud storage, or restore on another server. All features are free and built in; there are no add-ons, licence keys or storage resale. You bring your own storage account.
+Slice Backup packs your site into a single bundle that you can keep as a backup, send to your own cloud storage, or restore on another server. All features are free and built in; there are no add-ons, licence keys or storage resale. You bring your own storage account.
 
 = Backups that finish, even on large sites =
 
@@ -23,7 +23,7 @@ Backups and restores run as background jobs made of short steps (20 seconds by d
 * Bundles can be encrypted with AES-256-GCM. The key is derived from your passphrase with PBKDF2-SHA256 (310,000 iterations).
 * Every 1 MB chunk is authenticated, so any modification, reordering or truncation of the file is detected before anything is restored.
 * The bundle's details (source site, contents) are stored encrypted too and can be shown after entering the passphrase.
-* A saved passphrase and cloud secret keys are stored encrypted with your site's security keys, never in plain text. The passphrase can instead be defined as `WPBM_ENCRYPTION_PASSPHRASE` in `wp-config.php`.
+* A saved passphrase and cloud secret keys are stored encrypted with your site's security keys, never in plain text. The passphrase can instead be defined as `SLICE_BACKUP_ENCRYPTION_PASSPHRASE` in `wp-config.php`.
 
 = Your own cloud storage =
 
@@ -70,8 +70,8 @@ Move a site straight from one server to another without downloading anything:
 * Table prefix differences are converted automatically.
 * PHP compatibility check: plugins that would crash on the destination's PHP version are deactivated (files kept) and a crashing active theme is replaced by a default theme, with a report.
 * Multisite: whole network, or one site converted to a standalone site.
-* WP-CLI: `wp bundle export [--encrypt] [--upload] [--push=<key> --push-restore]`, `wp bundle import <file>`, `wp bundle pull <key>`, `wp bundle list`, `wp bundle delete`, `wp bundle cloud-test`.
-* REST API under `/wp-json/wp-bundle-migrator/v1/` for automation with Application Passwords.
+* WP-CLI: `wp slice-backup export [--encrypt] [--upload] [--push=<key> --push-restore]`, `wp slice-backup import <file>`, `wp slice-backup pull <key>`, `wp slice-backup list`, `wp slice-backup delete`, `wp slice-backup cloud-test`.
+* REST API under `/wp-json/slice-backup/v1/` for automation with Application Passwords.
 
 = Security =
 
@@ -83,9 +83,9 @@ Move a site straight from one server to another without downloading anything:
 
 == Installation ==
 
-1. Upload the `wp-bundle-migrator` folder to `/wp-content/plugins/`, or install the zip under Plugins > Add New > Upload Plugin.
+1. Upload the `slice-backup` folder to `/wp-content/plugins/`, or install the zip under Plugins > Add New > Upload Plugin.
 2. Activate the plugin (on multisite, network-activate it).
-3. Open **Tools > Bundle Migrator** (on multisite: **Network Admin > Bundle Migrator**).
+3. Open **Tools > Slice Backup** (on multisite: **Network Admin > Slice Backup**).
 4. Optional: under **Settings**, connect cloud storage, save an encryption passphrase and set up a schedule.
 
 To move a site: create a backup on the old site, install WordPress and this plugin on the new server, then restore the bundle there (upload it, or pick it from cloud storage).
@@ -106,7 +106,7 @@ They run through WP-Cron, which is triggered by site visits. On low-traffic site
 
 = Where are backups stored? =
 
-In `wp-content/uploads/wp-bundle-migrator-temp/`, and in your bucket if cloud upload is on.
+In `wp-content/uploads/slice-backup-temp/`, and in your bucket if cloud upload is on.
 
 = Will I be logged out after a restore? =
 
@@ -114,7 +114,7 @@ Usually yes, because restoring the database replaces all users. Log in with an a
 
 = What happens to my backups when I delete the plugin? =
 
-Settings, schedules and temporary files are removed. Backup bundles are kept unless `WPBM_DELETE_BUNDLES_ON_UNINSTALL` is defined as true in `wp-config.php`. Cloud copies are never deleted on uninstall.
+Settings, schedules and temporary files are removed. Backup bundles are kept unless `SLICE_BACKUP_DELETE_BUNDLES_ON_UNINSTALL` is defined as true in `wp-config.php`. Cloud copies are never deleted on uninstall.
 
 = Does the plugin send data anywhere? =
 
@@ -139,41 +139,14 @@ Each service is contacted only after you configure it, using your own account:
 
 == Hooks ==
 
-* `wpbm_required_capability` (filter) - capability needed to use the plugin.
-* `wpbm_chunk_size` (filter) - database rows read per query.
-* `wpbm_export_exclude_paths` (filter) - absolute paths left out of a component.
-* `wpbm_before_export`, `wpbm_after_export`, `wpbm_before_restore`, `wpbm_after_restore` (actions).
+* `slice_backup_required_capability` (filter) - capability needed to use the plugin.
+* `slice_backup_chunk_size` (filter) - database rows read per query.
+* `slice_backup_export_exclude_paths` (filter) - absolute paths left out of a component.
+* `slice_backup_before_export`, `slice_backup_after_export`, `slice_backup_before_restore`, `slice_backup_after_restore` (actions).
 
-* `wpbm_peer_sslverify` (filter) - verify TLS certificates in site-to-site requests (default true).
+* `slice_backup_peer_sslverify` (filter) - verify TLS certificates in site-to-site requests (default true).
 
 == Changelog ==
 
-= 1.3.0 =
-* New: SFTP destination with password or private-key login and host key pinning (bundled phpseclib).
-* New: Dropbox destination with OAuth 2 PKCE (your own app key), resumable upload sessions and ranged downloads.
-* New: site-to-site push and pull with expiring, revocable transfer keys and HMAC-signed requests; optional automatic restore on the receiving site.
-* New: WP-CLI `--push`, `--push-restore` and `wp bundle pull`.
-* Changed: cloud storage code reorganized into pluggable destinations.
-
-= 1.2.0 =
-* New: resumable background jobs for backup, restore, cloud upload and cloud download. They survive host time limits, closed tabs and interrupted requests, and show live progress.
-* New: AES-256-GCM bundle encryption with authenticated chunks and an encrypted manifest.
-* New: cloud storage for Amazon S3, Cloudflare R2, Google Cloud Storage, Wasabi, Backblaze B2, DigitalOcean Spaces and MinIO, with a real connection test, multipart resumable uploads, cloud listing, download and delete.
-* New: scheduled backups with grandfather-father-son retention (local and cloud), email notifications and webhooks.
-* New: secrets (cloud keys, passphrase) are stored encrypted.
-* New: WP-CLI `--encrypt`, `--upload`, `--passphrase` and `wp bundle cloud-test`.
-* New: System checks for OpenSSL and WP-Cron.
-
-= 1.1.0 =
-* Security fixes (multisite privilege escalation, download handler, upload validation, storage protection) and many bug fixes; redesigned interface. Unimplemented features were removed.
-
-= 1.0.0 =
-* Initial release.
-
-== Upgrade Notice ==
-
-= 1.3.0 =
-Adds SFTP, Dropbox and direct site-to-site transfer.
-
-= 1.2.0 =
-Adds encryption, cloud storage, scheduled backups and resumable background jobs.
+= 1.0.0-beta =
+* First public beta: resumable backups and restores, AES-256 encryption, S3-compatible storage, SFTP, Dropbox, site-to-site push and pull, scheduled backups with GFS retention, serialization-safe URL replacement and a PHP compatibility check.

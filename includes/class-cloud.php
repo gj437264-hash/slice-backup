@@ -4,12 +4,12 @@
  *
  * Users bring their own storage account; the plugin never resells or proxies storage.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -106,7 +106,7 @@ final class Cloud {
             ),
             'minio'   => array(
                 'kind'      => 's3',
-                'label'     => __('MinIO / other S3-compatible', 'wp-bundle-migrator'),
+                'label'     => __('MinIO / other S3-compatible', 'slice-backup'),
                 'endpoint'  => '',
                 'region'    => 'us-east-1',
                 'pathStyle' => true,
@@ -119,7 +119,7 @@ final class Cloud {
             ),
             'sftp'    => array(
                 'kind'   => 'sftp',
-                'label'  => __('SFTP / SSH server', 'wp-bundle-migrator'),
+                'label'  => __('SFTP / SSH server', 'slice-backup'),
                 'fields' => array(),
                 'links'  => array(
                     'keys' => 'https://www.ssh.com/academy/ssh/keygen',
@@ -186,7 +186,7 @@ final class Cloud {
             case 'dropbox':
                 return new DropboxDestination($c);
         }
-        throw new \InvalidArgumentException(__('Choose a storage provider.', 'wp-bundle-migrator'));
+        throw new \InvalidArgumentException(__('Choose a storage provider.', 'slice-backup'));
     }
 
     /**
@@ -241,7 +241,7 @@ final class Cloud {
 
     public static function delete(string $filename): void {
         if (!Storage::isBundleName($filename)) {
-            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Invalid bundle file name.', 'slice-backup'));
         }
         self::destination()->delete($filename);
     }
@@ -278,7 +278,7 @@ final class Cloud {
      */
     public static function appendChunk(string $target, string $data): void {
         if (file_put_contents($target, $data, FILE_APPEND) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-            throw new \RuntimeException(__('Could not save the downloaded data. The disk may be full.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not save the downloaded data. The disk may be full.', 'slice-backup'));
         }
     }
 

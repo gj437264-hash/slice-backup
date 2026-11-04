@@ -5,12 +5,12 @@
  * No app secret is needed or stored: the user authorizes the app in Dropbox, pastes the
  * one-time code back, and the plugin keeps only an (encrypted) refresh token.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -25,7 +25,7 @@ final class DropboxDestination implements Destination {
     private const CONTENT        = 'https://content.dropboxapi.com/2/';
     private const TOKEN_URL      = 'https://api.dropboxapi.com/oauth2/token';
     private const AUTHORIZE_URL  = 'https://www.dropbox.com/oauth2/authorize';
-    private const TOKEN_TRANSIENT = 'wpbm_dropbox_access';
+    private const TOKEN_TRANSIENT = 'slice_backup_dropbox_access';
 
     /** @var string */
     private $appKey;
@@ -42,10 +42,10 @@ final class DropboxDestination implements Destination {
         $this->appKey       = trim((string) $config['dropbox_app_key']);
         $this->refreshToken = (string) $config['dropbox_refresh'];
         if ($this->appKey === '') {
-            throw new \InvalidArgumentException(__('Enter your Dropbox app key.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Enter your Dropbox app key.', 'slice-backup'));
         }
         if ($this->refreshToken === '') {
-            throw new \InvalidArgumentException(__('Connect your Dropbox account first.', 'wp-bundle-migrator'));
+            throw new \InvalidArgumentException(__('Connect your Dropbox account first.', 'slice-backup'));
         }
         $path      = trim(str_replace('\\', '/', (string) $config['path']), '/');
         $this->dir = $path === '' ? '' : '/' . $path;
@@ -90,7 +90,7 @@ final class DropboxDestination implements Destination {
             )
         );
         if (empty($data['refresh_token'])) {
-            throw new \RuntimeException(__('Dropbox did not return a refresh token. Make sure the app uses "Scoped access".', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Dropbox did not return a refresh token. Make sure the app uses "Scoped access".', 'slice-backup'));
         }
         if (!empty($data['access_token'])) {
             set_site_transient(self::TOKEN_TRANSIENT, Crypto::seal((string) $data['access_token']), max(60, (int) ($data['expires_in'] ?? 14400) - 300));
@@ -114,14 +114,14 @@ final class DropboxDestination implements Destination {
     private static function tokenRequest(array $body): array {
         $response = wp_remote_post(self::TOKEN_URL, array('timeout' => 30, 'body' => $body));
         if (is_wp_error($response)) {
-            throw new \RuntimeException(sprintf(__('Could not reach Dropbox: %s', 'wp-bundle-migrator'), $response->get_error_message())); // phpcs:ignore WordPress.WP.I18n.MissingTranslatorsComment
+            throw new \RuntimeException(sprintf(__('Could not reach Dropbox: %s', 'slice-backup'), $response->get_error_message())); // phpcs:ignore WordPress.WP.I18n.MissingTranslatorsComment
         }
         $data = json_decode((string) wp_remote_retrieve_body($response), true);
         if ((int) wp_remote_retrieve_response_code($response) !== 200 || !is_array($data)) {
             $message = is_array($data) ? (string) ($data['error_description'] ?? $data['error'] ?? '') : '';
             throw new \RuntimeException(
                 /* translators: %s: Dropbox error. */
-                sprintf(__('Dropbox rejected the authorization: %s. Start the connection again and paste the new code.', 'wp-bundle-migrator'), $message !== '' ? $message : 'HTTP ' . wp_remote_retrieve_response_code($response))
+                sprintf(__('Dropbox rejected the authorization: %s. Start the connection again and paste the new code.', 'slice-backup'), $message !== '' ? $message : 'HTTP ' . wp_remote_retrieve_response_code($response))
             );
         }
         return $data;
@@ -140,7 +140,7 @@ final class DropboxDestination implements Destination {
         try {
             $data = self::tokenRequest(array('grant_type' => 'refresh_token', 'refresh_token' => $this->refreshToken, 'client_id' => $this->appKey));
         } catch (\Throwable $e) {
-            throw new \RuntimeException(__('Dropbox access was revoked or expired. Reconnect Dropbox under Settings > Cloud storage.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Dropbox access was revoked or expired. Reconnect Dropbox under Settings > Cloud storage.', 'slice-backup'));
         }
         $token = (string) $data['access_token'];
         set_site_transient(self::TOKEN_TRANSIENT, Crypto::seal($token), max(60, (int) ($data['expires_in'] ?? 14400) - 300));
@@ -195,7 +195,7 @@ final class DropboxDestination implements Destination {
         );
         if ($rawResult) {
             if (is_wp_error($response)) {
-                throw new DropboxError(sprintf(__('Could not reach Dropbox: %s', 'wp-bundle-migrator'), $response->get_error_message()), 0, ''); // phpcs:ignore WordPress.WP.I18n.MissingTranslatorsComment
+                throw new DropboxError(sprintf(__('Could not reach Dropbox: %s', 'slice-backup'), $response->get_error_message()), 0, ''); // phpcs:ignore WordPress.WP.I18n.MissingTranslatorsComment
             }
             $code = (int) wp_remote_retrieve_response_code($response);
             if ($code !== 200 && $code !== 206) {
@@ -213,7 +213,7 @@ final class DropboxDestination implements Destination {
      */
     private static function decode($response): array {
         if (is_wp_error($response)) {
-            throw new DropboxError(sprintf(__('Could not reach Dropbox: %s', 'wp-bundle-migrator'), $response->get_error_message()), 0, ''); // phpcs:ignore WordPress.WP.I18n.MissingTranslatorsComment
+            throw new DropboxError(sprintf(__('Could not reach Dropbox: %s', 'slice-backup'), $response->get_error_message()), 0, ''); // phpcs:ignore WordPress.WP.I18n.MissingTranslatorsComment
         }
         $code = (int) wp_remote_retrieve_response_code($response);
         $body = (string) wp_remote_retrieve_body($response);
@@ -224,7 +224,7 @@ final class DropboxDestination implements Destination {
         $summary = is_array($data) ? (string) ($data['error_summary'] ?? '') : trim(wp_strip_all_tags($body));
         throw new DropboxError(
             /* translators: 1: HTTP status, 2: Dropbox error summary. */
-            sprintf(__('Dropbox error (HTTP %1$d): %2$s', 'wp-bundle-migrator'), $code, $summary !== '' ? $summary : __('unknown error', 'wp-bundle-migrator')),
+            sprintf(__('Dropbox error (HTTP %1$d): %2$s', 'slice-backup'), $code, $summary !== '' ? $summary : __('unknown error', 'slice-backup')),
             $code,
             $summary,
             is_array($data) ? $data : array()
@@ -261,10 +261,10 @@ final class DropboxDestination implements Destination {
                 return self::rpc($t, 'users/get_current_account', null);
             }
         );
-        $path = $this->path('.wpbm-connection-test-' . strtolower(wp_generate_password(8, false)));
+        $path = $this->path('.slicebk-connection-test-' . strtolower(wp_generate_password(8, false)));
         $this->call(
             static function (string $t) use ($path): array {
-                return self::content($t, 'files/upload', array('path' => $path, 'mode' => 'overwrite', 'mute' => true), 'WP Bundle Migrator connection test');
+                return self::content($t, 'files/upload', array('path' => $path, 'mode' => 'overwrite', 'mute' => true), 'Slice Backup connection test');
             }
         );
         $this->call(
@@ -274,7 +274,7 @@ final class DropboxDestination implements Destination {
         );
         return sprintf(
             /* translators: 1: account name, 2: folder. */
-            __('Connected to the Dropbox account of %1$s. Writing and deleting files in %2$s works.', 'wp-bundle-migrator'),
+            __('Connected to the Dropbox account of %1$s. Writing and deleting files in %2$s works.', 'slice-backup'),
             (string) ($account['name']['display_name'] ?? '?'),
             'Apps/…' . ($this->dir !== '' ? $this->dir : '/')
         );
@@ -351,7 +351,7 @@ final class DropboxDestination implements Destination {
 
         $handle = fopen($path, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$handle) {
-            throw new \RuntimeException(__('Could not read the bundle for uploading.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not read the bundle for uploading.', 'slice-backup'));
         }
 
         try {
@@ -421,7 +421,7 @@ final class DropboxDestination implements Destination {
                 );
             } catch (DropboxError $e) {
                 /* translators: %s: file name. */
-                throw new \RuntimeException(sprintf(__('%s was not found in Dropbox.', 'wp-bundle-migrator'), $filename));
+                throw new \RuntimeException(sprintf(__('%s was not found in Dropbox.', 'slice-backup'), $filename));
             }
             file_put_contents($target, ''); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
             $state = array('size' => (float) ($meta['size'] ?? 0), 'offset' => 0.0);
@@ -439,7 +439,7 @@ final class DropboxDestination implements Destination {
                 }
             );
             if ($data['body'] === '') {
-                throw new \RuntimeException(__('Dropbox returned an empty response.', 'wp-bundle-migrator'));
+                throw new \RuntimeException(__('Dropbox returned an empty response.', 'slice-backup'));
             }
             Cloud::appendChunk($target, $data['body']);
             $state['offset'] = $start + strlen($data['body']);

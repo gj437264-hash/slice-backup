@@ -5,12 +5,12 @@
  * vendor/phpseclib               phpseclib 3.0.58 (MIT) - SSH/SFTP.
  * vendor/constant_time_encoding  paragonie/constant_time_encoding 2.8.2 (MIT) - phpseclib dependency.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -36,8 +36,8 @@ final class Vendor {
         self::$registered = true;
 
         $map = array(
-            'phpseclib3\\'            => WPBM_PATH . 'vendor/phpseclib/',
-            'ParagonIE\\ConstantTime\\' => WPBM_PATH . 'vendor/constant_time_encoding/src/',
+            'phpseclib3\\'            => SLICE_BACKUP_PATH . 'vendor/phpseclib/',
+            'ParagonIE\\ConstantTime\\' => SLICE_BACKUP_PATH . 'vendor/constant_time_encoding/src/',
         );
         spl_autoload_register(
             static function (string $class) use ($map): void {
@@ -54,9 +54,9 @@ final class Vendor {
         );
 
         try {
-            require_once WPBM_PATH . 'vendor/phpseclib/bootstrap.php';
+            require_once SLICE_BACKUP_PATH . 'vendor/phpseclib/bootstrap.php';
         } catch (\Throwable $e) {
-            throw new \RuntimeException(__('SFTP is not available on this server: ', 'wp-bundle-migrator') . $e->getMessage());
+            throw new \RuntimeException(__('SFTP is not available on this server: ', 'slice-backup') . $e->getMessage());
         }
     }
 }

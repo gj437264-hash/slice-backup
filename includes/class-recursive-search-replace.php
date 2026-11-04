@@ -5,12 +5,12 @@
  * Serialized PHP values are rewritten by a small parser that fixes string lengths
  * without ever calling unserialize(), so no objects are instantiated (CWE-502).
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;

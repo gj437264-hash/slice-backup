@@ -2,12 +2,12 @@
 /**
  * Email and webhook notifications for scheduled backups.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -35,13 +35,13 @@ final class Notifier {
         $message = $success
             ? sprintf(
                 /* translators: 1: file name, 2: size. */
-                __('Scheduled backup created: %1$s (%2$s).', 'wp-bundle-migrator'),
+                __('Scheduled backup created: %1$s (%2$s).', 'slice-backup'),
                 (string) ($result['bundleFile'] ?? ''),
                 (string) ($result['formattedSize'] ?? '')
             )
             : sprintf(
                 /* translators: %s: error message. */
-                __('Scheduled backup failed: %s', 'wp-bundle-migrator'),
+                __('Scheduled backup failed: %s', 'slice-backup'),
                 $job->error
             );
 
@@ -60,13 +60,13 @@ final class Notifier {
         if (is_email($email) && ($when === 'always' || (!$success && $when === 'failure'))) {
             $subject = sprintf(
                 /* translators: 1: site host, 2: status. */
-                __('[%1$s] Backup %2$s', 'wp-bundle-migrator'),
+                __('[%1$s] Backup %2$s', 'slice-backup'),
                 wp_parse_url($site, PHP_URL_HOST),
-                $success ? __('succeeded', 'wp-bundle-migrator') : __('FAILED', 'wp-bundle-migrator')
+                $success ? __('succeeded', 'slice-backup') : __('FAILED', 'slice-backup')
             );
             $body = $message . "\n\n" . sprintf(
                 /* translators: %s: admin URL. */
-                __('Manage backups: %s', 'wp-bundle-migrator'),
+                __('Manage backups: %s', 'slice-backup'),
                 Plugin::adminUrl('backups')
             );
             wp_mail($email, $subject, $body);

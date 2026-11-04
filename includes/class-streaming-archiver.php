@@ -5,12 +5,12 @@
  *  2. archive: add files from the list to the zip, a batch per request.
  * Memory stays flat because neither step holds the whole file list in memory.
  *
- * @package WpBundleMigrator
+ * @package SliceBackup
  */
 
 declare(strict_types=1);
 
-namespace WpBundleMigrator;
+namespace SliceBackup;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -45,9 +45,9 @@ class StreamingArchiver {
         $isSubsite  = is_multisite() && $mode === 'subsite' && $subsiteId > 0;
 
         return array(
-            'format'         => 'wp-bundle-v2',
-            'plugin_version' => WPBM_VERSION,
-            'version'        => WPBM_VERSION,
+            'format'         => 'slice-backup-v1',
+            'plugin_version' => SLICE_BACKUP_VERSION,
+            'version'        => SLICE_BACKUP_VERSION,
             'wp_version'     => get_bloginfo('version'),
             'php_version'    => PHP_VERSION,
             'mysql_version'  => $wpdb->db_version(),
@@ -93,7 +93,7 @@ class StreamingArchiver {
 
         $uploads   = wp_upload_dir(null, false);
         $uploadDir = rtrim(wp_normalize_path((string) $uploads['basedir']), '/');
-        $selfDir   = rtrim(wp_normalize_path(WPBM_PATH), '/');
+        $selfDir   = rtrim(wp_normalize_path(SLICE_BACKUP_PATH), '/');
         $storage   = Storage::dir();
 
         $queue    = array();
@@ -104,7 +104,7 @@ class StreamingArchiver {
                 return;
             }
             /** Filters absolute paths left out of a bundle component. */
-            $exclude = (array) apply_filters('wpbm_export_exclude_paths', $exclude, $component);
+            $exclude = (array) apply_filters('slice_backup_export_exclude_paths', $exclude, $component);
             $excludes[$component] = array_values(array_unique(array_merge(
                 $excludes[$component] ?? array(),
                 array_map(
@@ -252,13 +252,13 @@ class StreamingArchiver {
      */
     public static function archiveStep(array &$state, float $deadline, float $byteBudget): bool {
         if (!class_exists('ZipArchive')) {
-            throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('The PHP zip extension (ZipArchive) is required. Ask your host to enable it.', 'slice-backup'));
         }
 
         $zip   = new \ZipArchive();
         $flags = empty($state['started']) ? \ZipArchive::CREATE | \ZipArchive::OVERWRITE : 0;
         if ($zip->open((string) $state['archive'], $flags) !== true) {
-            throw new \RuntimeException(__('Could not open the bundle file for writing. Check free disk space and folder permissions.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not open the bundle file for writing. Check free disk space and folder permissions.', 'slice-backup'));
         }
 
         if (empty($state['started'])) {
@@ -272,7 +272,7 @@ class StreamingArchiver {
         $list = fopen((string) $state['list'], 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
         if (!$list) {
             $zip->close();
-            throw new \RuntimeException(__('The file list for the bundle is missing.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('The file list for the bundle is missing.', 'slice-backup'));
         }
         fseek($list, (int) $state['pos']);
 
@@ -310,7 +310,7 @@ class StreamingArchiver {
         fclose($list); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         if (!$zip->close()) {
-            throw new \RuntimeException(__('Could not write to the bundle. The disk may be full.', 'wp-bundle-migrator'));
+            throw new \RuntimeException(__('Could not write to the bundle. The disk may be full.', 'slice-backup'));
         }
 
         return $eof;
