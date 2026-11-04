@@ -187,11 +187,13 @@ final class Peer {
             )
         );
         if (is_wp_error($response)) {
-            throw PeerError::make(
+            // PeerError::make() escapes the message.
+            $error = PeerError::make(
                 /* translators: %s: error. */
                 sprintf(__('Could not reach the other site: %s', 'slice-backup'), $response->get_error_message()),
                 0
             );
+            throw $error;
         }
 
         $code   = (int) wp_remote_retrieve_response_code($response);
@@ -207,12 +209,13 @@ final class Peer {
         if ($code === 404 && $message === '') {
             $message = __('The other site does not have Slice Backup 1.2 or newer active, or its REST API is blocked.', 'slice-backup');
         }
-        throw PeerError::make(
+        $error = PeerError::make(
             /* translators: 1: HTTP status, 2: message. */
             sprintf(__('The other site refused the request (HTTP %1$d): %2$s', 'slice-backup'), $code, $message !== '' ? $message : wp_strip_all_tags(substr($text, 0, 200))),
             $code,
             $isJson ? $json : array()
         );
+        throw $error;
     }
 
     /**

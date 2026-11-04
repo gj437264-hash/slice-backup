@@ -195,8 +195,7 @@ final class DropboxDestination implements Destination {
         );
         if ($rawResult) {
             if (is_wp_error($response)) {
-                /* translators: %s: error message. */
-                throw DropboxError::make(sprintf(__('Could not reach Dropbox: %s', 'slice-backup'), $response->get_error_message()), 0, '');
+                self::decode($response);
             }
             $code = (int) wp_remote_retrieve_response_code($response);
             if ($code !== 200 && $code !== 206) {
@@ -214,8 +213,13 @@ final class DropboxDestination implements Destination {
      */
     private static function decode($response): array {
         if (is_wp_error($response)) {
-            /* translators: %s: error message. */
-                throw DropboxError::make(sprintf(__('Could not reach Dropbox: %s', 'slice-backup'), $response->get_error_message()), 0, '');
+            $error = DropboxError::make(
+                /* translators: %s: error message. */
+                sprintf(__('Could not reach Dropbox: %s', 'slice-backup'), $response->get_error_message()),
+                0,
+                ''
+            );
+            throw $error;
         }
         $code = (int) wp_remote_retrieve_response_code($response);
         $body = (string) wp_remote_retrieve_body($response);
@@ -224,13 +228,15 @@ final class DropboxDestination implements Destination {
             return is_array($data) ? $data : array();
         }
         $summary = is_array($data) ? (string) ($data['error_summary'] ?? '') : trim(wp_strip_all_tags($body));
-        throw DropboxError::make(
+        // DropboxError::make() escapes the message.
+        $error = DropboxError::make(
             /* translators: 1: HTTP status, 2: Dropbox error summary. */
             sprintf(__('Dropbox error (HTTP %1$d): %2$s', 'slice-backup'), $code, $summary !== '' ? $summary : __('unknown error', 'slice-backup')),
             $code,
             $summary,
             is_array($data) ? $data : array()
         );
+        throw $error;
     }
 
     /**
