@@ -51,6 +51,8 @@ final class AjaxController {
         }
         add_action('wp_ajax_slice_backup_job_tick', array(__CLASS__, 'jobTick'));
         add_action('wp_ajax_nopriv_slice_backup_job_tick', array(__CLASS__, 'jobTick'));
+        // A restore replaces the users table and logs the admin out; the job token still allows cancelling.
+        add_action('wp_ajax_nopriv_slice_backup_job_cancel', array(__CLASS__, 'jobCancel'));
     }
 
     private static function guard(): void {
@@ -189,6 +191,20 @@ final class AjaxController {
     }
 
     public static function jobCancel(): void {
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- Authorized by the job's secret token below, or by guard().
+        $id    = isset($_POST['job']) ? sanitize_text_field(wp_unslash((string) $_POST['job'])) : '';
+        $token = isset($_POST['token']) ? sanitize_text_field(wp_unslash((string) $_POST['token'])) : '';
+        // phpcs:enable
+        if ($id !== '' && $token !== '') {
+            $job = Job::load($id);
+            if ($job !== null && $job->checkToken($token)) {
+                if ($job->status === 'running') {
+                    MigratorEngine::cancel($job);
+                }
+                wp_send_json_success(array('cancelled' => true));
+            }
+        }
+
         self::guard();
         $job = Job::active();
         if ($job !== null) {

@@ -328,6 +328,40 @@ final class CliCommand {
     }
 
     /**
+     * Continues the backup or restore that is still running, for example after its PHP
+     * process was stopped by the server. It carries on from the last saved position.
+     *
+     * [--cancel]
+     * : Cancel the running job safely instead of continuing it.
+     *
+     * ## EXAMPLES
+     *
+     *     wp slice-backup resume
+     *     wp slice-backup resume --cancel
+     *
+     * @param string[]             $args
+     * @param array<string, mixed> $assocArgs
+     */
+    public function resume(array $args, array $assocArgs): void {
+        $job = Job::active();
+        if ($job === null) {
+            \WP_CLI::success('No backup or restore is running.');
+            return;
+        }
+        if (!empty($assocArgs['cancel'])) {
+            $now = MigratorEngine::cancel($job);
+            \WP_CLI::success($now ? 'Cancelled.' : 'Another process is working on the job; it will stop at its next safe point.');
+            return;
+        }
+        \WP_CLI::log(sprintf('Continuing the %s job %s...', $job->type, $job->id));
+        $job = MigratorEngine::runToCompletion($job, array($this, 'progress'));
+        if ($job->status !== 'done') {
+            \WP_CLI::error($job->error !== '' ? $job->error : 'The job did not finish (' . $job->status . ').');
+        }
+        \WP_CLI::success('Finished.');
+    }
+
+    /**
      * Prints job progress (used as a callback).
      *
      * @internal

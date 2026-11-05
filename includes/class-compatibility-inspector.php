@@ -346,6 +346,93 @@ class CompatibilityInspector {
     }
 
     /**
+     * Must-use plugins cannot be deactivated, so one that fails on this server's PHP would
+     * break every request. Returns the top-level entries (files or folders) of a staged
+     * must-use plugins folder that would fail, with the reason.
+     *
+     * @return array<string, string> Entry name => issue.
+     */
+    public function muPluginConflicts(string $dir): array {
+        if (!is_dir($dir) || version_compare(PHP_VERSION, '8.0.0', '<')) {
+            return array();
+        }
+        $this->deadline = microtime(true) + self::TIME_BUDGET_SECONDS;
+        $conflicts      = array();
+        foreach ((array) scandir($dir) as $entry) {
+            if (!is_string($entry) || $entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path    = $dir . '/' . $entry;
+            $finding = null;
+            if (is_dir($path)) {
+                $finding = $this->scanDirectory($path);
+            } elseif (strtolower(pathinfo($entry, PATHINFO_EXTENSION)) === 'php' && filesize($path) <= self::MAX_FILE_BYTES) {
+                $finding = $this->scanFile($path);
+            }
+            if ($finding !== null && $finding['severity'] === 'fatal') {
+                $conflicts[$entry] = (string) $finding['issue'];
+            }
+        }
+        return $conflicts;
+    }
+
+    /**
+     * Folder names directly inside a directory (plugin or theme slugs).
+     *
+     * @return string[]
+     */
+    public function folderNames(string $dir): array {
+        return $this->subdirectories($dir);
+    }
+
+    /**
+     * Makes sure the site can boot after a restore that stopped early: deactivates the given
+     * plugins, and moves off the active theme when it is one of the given (possibly
+     * incomplete) themes or is missing on this server.
+     *
+     * @param string[] $pluginSlugs
+     * @param string[] $themeSlugs     Themes that may be incomplete.
+     * @param string[] $preferredThemes Themes to fall back to first (this server's own theme).
+     * @return string[] Names of what was switched off.
+     */
+    public function safeBoot(array $pluginSlugs, array $themeSlugs, array $preferredThemes = array()): array {
+        $off = empty($pluginSlugs) ? array() : $this->deactivatePlugins($pluginSlugs);
+
+        wp_cache_delete('alloptions', 'options');
+        wp_cache_delete('template', 'options');
+        wp_cache_delete('stylesheet', 'options');
+        $root     = get_theme_root();
+        $active   = array_unique(array((string) get_option('stylesheet'), (string) get_option('template')));
+        $affected = array();
+        foreach ($active as $theme) {
+            if ($theme !== '' && (in_array($theme, $themeSlugs, true) || !is_dir($root . '/' . $theme))) {
+                $affected[] = $theme;
+            }
+        }
+        if (empty($affected)) {
+            return array_values(array_unique($off));
+        }
+
+        $exclude  = array_values(array_unique(array_merge($themeSlugs, $affected)));
+        $fallback = null;
+        foreach ($preferredThemes as $candidate) {
+            $candidate = (string) $candidate;
+            if ($candidate !== '' && !in_array($candidate, $exclude, true) && is_file($root . '/' . $candidate . '/style.css')) {
+                $fallback = $candidate;
+                break;
+            }
+        }
+        if ($fallback === null) {
+            $fallback = $this->fallbackTheme($exclude);
+        }
+        if ($fallback !== null) {
+            switch_theme($fallback);
+            $off = array_merge($off, $affected);
+        }
+        return array_values(array_unique($off));
+    }
+
+    /**
      * @return string[] Sub-folder names.
      */
     private function subdirectories(string $dir): array {

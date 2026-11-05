@@ -379,8 +379,13 @@
 					if (error.status === 403 && !error.network) {
 						return Jobs.end({ status: 'failed', error: error.message, type: Jobs.current.type });
 					}
-					// The job keeps running on the server; keep trying, more slowly.
-					$('#slicebk-job-detail').textContent = sprintf(__('Connection problem, retrying (%d)…', D), errors);
+					// The server records a crashed step and continues it in smaller pieces, and the
+					// job may still be running there, so never give up: keep checking, more slowly.
+					if (errors >= 40) {
+						$('#slicebk-job-detail').textContent = sprintf(__('No answer from the server for a while (%s). The job may still be running there; checking again every 30 seconds. You can cancel it.', D), error.message || __('connection problem', D));
+						return delay(30000).then(step);
+					}
+					$('#slicebk-job-detail').textContent = sprintf(__('%1$s Retrying (%2$d)…', D), error.message || __('Connection problem.', D), errors);
 					return delay(Math.min(15000, 1000 * errors)).then(step);
 				});
 			};
@@ -392,7 +397,7 @@
 			var percent = Math.max(0, Math.min(100, Number(p.percent) || 0));
 			$('#slicebk-job-title').textContent = jobTitles[job.type] || '';
 			$('#slicebk-job-label').textContent = p.label || '';
-			$('#slicebk-job-detail').textContent = p.detail || '';
+			$('#slicebk-job-detail').textContent = [p.detail || '', job.recovery || ''].filter(Boolean).join(' · ');
 			$('#slicebk-job-percent').textContent = Math.floor(percent) + '%';
 			var bar = $('#slicebk-job-bar');
 			bar.setAttribute('aria-valuenow', String(Math.floor(percent)));
@@ -461,7 +466,9 @@
 				danger: true
 			}).then(function (ok) {
 				if (ok) {
-					request('slice_backup_job_cancel').catch(function (e) { toast(e.message, 'error'); });
+					// The job token works even after a restore has logged this browser out.
+					var running = Jobs.current;
+					request('slice_backup_job_cancel', running ? { job: running.id, token: Jobs.token } : {}).catch(function (e) { toast(e.message, 'error'); });
 				}
 			});
 		});

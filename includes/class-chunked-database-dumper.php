@@ -117,6 +117,7 @@ class ChunkedDatabaseDumper {
                     $state['created'] = false;
                     $state['last']    = null;
                     $state['offset']  = 0;
+                    unset($state['noKeyLimit']);
                 }
                 if (microtime(true) >= $deadline) {
                     break;
@@ -258,7 +259,9 @@ class ChunkedDatabaseDumper {
         $last    = $state['last'];
         $offset  = (int) $state['offset'];
 
-        $chunks = 0;
+        $cap     = MemoryBudget::rowCap($this->chunkSize);
+        $columns = $pk !== null ? array_column(DbUtil::columns($actual), 'name') : array();
+        $chunks  = 0;
         while (true) {
             if ($chunks++ > 0 && microtime(true) >= $deadline) {
                 $state['last']   = $last;
@@ -271,9 +274,36 @@ class ChunkedDatabaseDumper {
 
             $where = $filters;
             if ($pk !== null && $last !== null) {
+                $where[] = $this->keyAfter($pk, $last);
+            }
+
+            $limit  = $cap;
+            $final  = false;
+            $window = null;
+            if ($pk !== null && !empty($columns)) {
+                // Measure first, then load only as many rows as fit the memory budget.
+                $window = $this->measureWindow($actual, $pk, $columns, $where, $cap);
+                if ($window === null) {
+                    break;
+                }
+                if ($window['rows'] === 1 && $window['first'] > self::hugeRowBytes()) {
+                    // One very large row: stream it in pieces instead of loading it.
+                    $this->exportHugeRow($handle, $actual, $target, $pk, $window['upper'], $columns, $options);
+                    $state['rows'] = (int) ($state['rows'] ?? 0) + 1;
+                    $last          = $window['upper'];
+                    if ($window['final']) {
+                        break;
+                    }
+                    continue;
+                }
                 $where[] = $pk['numeric']
-                    ? $wpdb->prepare('%i > %d', $pk['column'], $last)
-                    : $wpdb->prepare('%i > %s', $pk['column'], $last);
+                    ? $wpdb->prepare('%i <= %d', $pk['column'], $window['upper'])
+                    : $wpdb->prepare('%i <= %s', $pk['column'], $window['upper']);
+                $limit = $window['rows'];
+                $final = $window['final'];
+            } elseif ($pk === null) {
+                // No key to measure by: start with one row, then size batches by the largest row seen.
+                $limit = max(1, min($cap, (int) ($state['noKeyLimit'] ?? 1)));
             }
 
             // Every piece is built with $wpdb->prepare(); the WHERE pieces are fixed strings or prepared above.
@@ -282,42 +312,202 @@ class ChunkedDatabaseDumper {
                 $sql .= ' WHERE ' . implode(' AND ', $where);
             }
             if ($pk !== null) {
-                $sql .= $wpdb->prepare(' ORDER BY %i ASC LIMIT %d', $pk['column'], $this->chunkSize);
+                $sql .= $wpdb->prepare(' ORDER BY %i ASC LIMIT %d', $pk['column'], $limit);
             } else {
-                $sql .= $wpdb->prepare(' LIMIT %d OFFSET %d', $this->chunkSize, $offset);
+                $sql .= $wpdb->prepare(' LIMIT %d OFFSET %d', $limit, $offset);
             }
 
-            $rows = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
-            if (empty($rows) && $wpdb->last_error !== '') {
+            $rows  = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+            $error = (string) $wpdb->last_error;
+            // Drop wpdb's own copy of the result; $rows is now the only one.
+            DbUtil::releaseMemory();
+            if (empty($rows) && $error !== '') {
                 throw new \RuntimeException(
                     esc_html(/* translators: 1: table name, 2: database error. */
-                    sprintf(__('Reading table %1$s failed: %2$s', 'slice-backup'), $actual, $wpdb->last_error))
+                    sprintf(__('Reading table %1$s failed: %2$s', 'slice-backup'), $actual, $error))
                 );
             }
             if (empty($rows)) {
+                // The measured rows vanished in the meantime (deleted by the live site): this
+                // window is empty, but rows after it still need exporting.
+                if ($window !== null && !$window['final']) {
+                    $last = $window['upper'];
+                    continue;
+                }
                 break;
             }
 
-            $count = count($rows);
-            $this->writeInserts($handle, $actual, $target, $rows, $options);
+            $count   = count($rows);
+            $lastRow = end($rows);
+            $lastKey = $pk !== null ? ($pk['numeric'] ? (int) $lastRow[$pk['column']] : (string) $lastRow[$pk['column']]) : null;
+            unset($lastRow);
+
+            $largest       = $this->writeInserts($handle, $target, $rows, $options, $this->tableRole($actual));
             $state['rows'] = (int) ($state['rows'] ?? 0) + $count;
+            unset($rows);
 
             if ($pk !== null) {
-                $lastRow = end($rows);
-                $last    = $pk['numeric'] ? (int) $lastRow[$pk['column']] : (string) $lastRow[$pk['column']];
+                $last = $lastKey;
             } else {
                 $offset += $count;
+                $state['noKeyLimit'] = max(1, min($cap, (int) floor(MemoryBudget::batchBytes() / max(1, $largest))));
             }
 
-            unset($rows);
-            DbUtil::releaseMemory();
-
-            if ($count < $this->chunkSize) {
+            if ($final || ($pk === null && $count < $limit) || ($pk !== null && empty($columns) && $count < $limit)) {
                 break;
             }
         }
 
         return true;
+    }
+
+    /**
+     * WHERE fragment for "key after the last exported row".
+     *
+     * @param array{column: string, numeric: bool} $pk
+     * @param int|string                           $last
+     */
+    private function keyAfter(array $pk, $last): string {
+        global $wpdb;
+        return $pk['numeric']
+            ? $wpdb->prepare('%i > %d', $pk['column'], $last)
+            : $wpdb->prepare('%i > %s', $pk['column'], $last);
+    }
+
+    /**
+     * Looks at the sizes of the next rows (keys and byte lengths only) and picks how many
+     * fit the memory budget. Returns null when there are no more rows.
+     *
+     * @param array{column: string, numeric: bool} $pk
+     * @param string[]                             $columns
+     * @param string[]                             $where   Prepared fragments.
+     * @return array{upper: int|string, rows: int, final: bool}|null
+     */
+    private function measureWindow(string $table, array $pk, array $columns, array $where, int $cap): ?array {
+        global $wpdb;
+
+        $lengths = array();
+        foreach ($columns as $col) {
+            $lengths[] = $wpdb->prepare('COALESCE(LENGTH(%i), 0)', $col);
+        }
+        $sql = $wpdb->prepare('SELECT %i AS k, (', $pk['column']) . implode(' + ', $lengths) . $wpdb->prepare(') AS b FROM %i', $table);
+        if (!empty($where)) {
+            $sql .= ' WHERE ' . implode(' AND ', $where);
+        }
+        $sql .= $wpdb->prepare(' ORDER BY %i ASC LIMIT %d', $pk['column'], $cap);
+
+        $sizes = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+        $error = (string) $wpdb->last_error;
+        DbUtil::releaseMemory();
+        if (empty($sizes)) {
+            if ($error !== '') {
+                throw new \RuntimeException(
+                    esc_html(/* translators: 1: table name, 2: database error. */
+                    sprintf(__('Reading table %1$s failed: %2$s', 'slice-backup'), $table, $error))
+                );
+            }
+            return null;
+        }
+
+        $take  = MemoryBudget::fit($sizes);
+        $upper = $sizes[$take - 1]['k'];
+        return array(
+            'upper' => $pk['numeric'] ? (int) $upper : (string) $upper,
+            'rows'  => $take,
+            'first' => (int) $sizes[0]['b'],
+            'final' => $take === count($sizes) && count($sizes) < $cap,
+        );
+    }
+
+    /** Characters per piece when a large value is streamed (at most 2 MB in UTF-8). */
+    private const PIECE_CHARS = 524288;
+
+    /**
+     * Rows larger than this are streamed in pieces instead of loaded whole.
+     */
+    private static function hugeRowBytes(): int {
+        return MB_IN_BYTES;
+    }
+
+    /**
+     * Writes one very large row without ever holding it in memory: an INSERT with the
+     * small columns (large ones empty), then one UPDATE ... CONCAT() per piece of each
+     * large column. Each piece only appends when the column has exactly the length it
+     * had before that piece, so replaying statements after a crash cannot duplicate data.
+     * Every statement stays small, which also keeps it under max_allowed_packet.
+     *
+     * @param resource                             $handle
+     * @param array{column: string, numeric: bool} $pk
+     * @param int|string                           $key
+     * @param string[]                             $columns
+     * @param array<string, mixed>                 $options
+     */
+    private function exportHugeRow($handle, string $actual, string $target, array $pk, $key, array $columns, array $options): void {
+        global $wpdb;
+
+        $byKey = $pk['numeric'] ? $wpdb->prepare(' WHERE %i = %d', $pk['column'], $key) : $wpdb->prepare(' WHERE %i = %s', $pk['column'], $key);
+
+        $lengthSql = array();
+        foreach ($columns as $i => $col) {
+            $lengthSql[] = $wpdb->prepare('CHAR_LENGTH(%i) AS %i', $col, 'c' . $i);
+        }
+        $lengths = $wpdb->get_row('SELECT ' . implode(', ', $lengthSql) . $wpdb->prepare(' FROM %i', $actual) . $byKey, ARRAY_N); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+        DbUtil::releaseMemory();
+        if (!is_array($lengths)) {
+            return;
+        }
+
+        $small = array();
+        $large = array();
+        foreach ($columns as $i => $col) {
+            if ($lengths[$i] !== null && (int) $lengths[$i] > self::PIECE_CHARS) {
+                $large[$col] = (int) $lengths[$i];
+            } else {
+                $small[] = $col;
+            }
+        }
+
+        $row = array();
+        if (!empty($small)) {
+            $fields = array();
+            foreach ($small as $col) {
+                $fields[] = $wpdb->prepare('%i', $col);
+            }
+            $row = (array) $wpdb->get_row('SELECT ' . implode(', ', $fields) . $wpdb->prepare(' FROM %i', $actual) . $byKey, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+            DbUtil::releaseMemory();
+        }
+        foreach (array_keys($large) as $col) {
+            $row[$col] = '';
+        }
+        $row = $this->transformRow($this->tableRole($actual), $row, $options);
+        if ($row === null) {
+            return;
+        }
+
+        $values = array();
+        foreach ($columns as $col) {
+            $values[] = $this->quote($row[$col] ?? null);
+        }
+        $table = DbUtil::ident($target);
+        $this->write($handle, 'INSERT INTO ' . $table . ' (' . implode(', ', array_map(array(DbUtil::class, 'ident'), $columns)) . ") VALUES\n(" . implode(', ', $values) . ");\n\n");
+        unset($values, $row);
+
+        $keySql = $pk['numeric'] ? (string) (int) $key : "'" . $this->escape((string) $key) . "'";
+        $where  = ' WHERE ' . DbUtil::ident($pk['column']) . ' = ' . $keySql;
+        foreach ($large as $col => $length) {
+            $ident = DbUtil::ident($col);
+            for ($offset = 1; $offset <= $length; $offset += self::PIECE_CHARS) {
+                $piece = $wpdb->get_var($wpdb->prepare('SELECT SUBSTRING(%i, %d, %d) FROM %i', $col, $offset, self::PIECE_CHARS, $actual) . $byKey); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+                DbUtil::releaseMemory();
+                if (!is_string($piece) || $piece === '') {
+                    break;
+                }
+                $this->write($handle, 'UPDATE ' . $table . ' SET ' . $ident . ' = CONCAT(' . $ident . ", '");
+                $this->write($handle, $this->escape($piece));
+                $this->write($handle, "')" . $where . ' AND CHAR_LENGTH(' . $ident . ') = ' . ($offset - 1) . ";\n\n");
+                unset($piece);
+            }
+        }
     }
 
     /**
@@ -347,48 +537,98 @@ class ChunkedDatabaseDumper {
     }
 
     /**
-     * Writes rows as INSERT statements no bigger than MAX_STATEMENT_BYTES.
+     * Writes rows as INSERT statements no bigger than MAX_STATEMENT_BYTES (a single larger
+     * row gets a statement of its own). Rows go to disk one at a time and are freed as they
+     * are written, so memory holds at most one escaped row on top of the batch.
      *
      * @param resource                          $handle
-     * @param array<int, array<string, mixed>> $rows
+     * @param array<int, array<string, mixed>> $rows    Emptied while writing.
      * @param array<string, mixed>              $options
+     * @return int Size in bytes of the largest row written.
      */
-    private function writeInserts($handle, string $actual, string $target, array $rows, array $options): void {
+    private function writeInserts($handle, string $target, array &$rows, array $options, string $role): int {
         $first = reset($rows);
         if (!is_array($first)) {
-            return;
+            return 0;
         }
 
         $columns = array_keys($first);
         $head    = 'INSERT INTO ' . DbUtil::ident($target) . ' (' . implode(', ', array_map(array(DbUtil::class, 'ident'), $columns)) . ") VALUES\n";
-        $role    = $this->tableRole($actual);
+        unset($first);
 
-        $buffer = array();
-        $bytes  = 0;
-        foreach ($rows as $row) {
-            $row = $this->transformRow($role, $row, $options);
+        $open    = false;
+        $bytes   = 0;
+        $largest = 0;
+        foreach (array_keys($rows) as $index) {
+            $row = $this->transformRow($role, $rows[$index], $options);
+            unset($rows[$index]);
             if ($row === null) {
                 continue;
             }
 
-            $values = array();
+            $size = 2;
             foreach ($columns as $col) {
-                $values[] = $this->quote($row[$col]);
+                $size += $row[$col] === null ? 4 : strlen((string) $row[$col]) + 4;
             }
-            $line = '(' . implode(', ', $values) . ')';
+            $largest = max($largest, $size);
 
-            if (!empty($buffer) && ($bytes + strlen($line)) > self::MAX_STATEMENT_BYTES) {
-                $this->write($handle, $head . implode(",\n", $buffer) . ";\n\n");
-                $buffer = array();
-                $bytes  = 0;
+            // Escaped size decides where a statement ends (escaping can double binary data).
+            $line = null;
+            if ($size < 262144) {
+                $values = array();
+                foreach ($columns as $col) {
+                    $values[] = $this->quote($row[$col]);
+                }
+                $line = implode(', ', $values);
+                unset($values);
+                $rowBytes = strlen($line) + 4;
+            } else {
+                $rowBytes = 2 * $size;
             }
-            $buffer[] = $line;
-            $bytes   += strlen($line) + 2;
+
+            if ($open && ($bytes + $rowBytes) > self::MAX_STATEMENT_BYTES) {
+                $this->write($handle, ";\n\n");
+                $open  = false;
+                $bytes = 0;
+            }
+            $this->write($handle, $open ? ",\n(" : $head . '(');
+            $open = true;
+
+            if ($line !== null) {
+                // Small row: one write.
+                $this->write($handle, $line);
+                $bytes += $rowBytes;
+                unset($line);
+            } else {
+                // Large row: one value at a time, so it is never copied whole more than once.
+                foreach ($columns as $i => $col) {
+                    if ($i > 0) {
+                        $this->write($handle, ', ');
+                    }
+                    $value = $row[$col];
+                    unset($row[$col]);
+                    if ($value === null) {
+                        $this->write($handle, 'NULL');
+                        $bytes += 6;
+                        continue;
+                    }
+                    $escaped = $this->escape((string) $value);
+                    unset($value);
+                    $this->write($handle, "'");
+                    $this->write($handle, $escaped);
+                    $this->write($handle, "'");
+                    $bytes += strlen($escaped) + 4;
+                    unset($escaped);
+                }
+            }
+            unset($row);
+            $this->write($handle, ')');
         }
 
-        if (!empty($buffer)) {
-            $this->write($handle, $head . implode(",\n", $buffer) . ";\n\n");
+        if ($open) {
+            $this->write($handle, ";\n\n");
         }
+        return $largest;
     }
 
     /**
@@ -442,20 +682,25 @@ class ChunkedDatabaseDumper {
      * @param mixed $value
      */
     private function quote($value): string {
-        global $wpdb;
-
         if ($value === null) {
             return 'NULL';
         }
+        return "'" . $this->escape((string) $value) . "'";
+    }
 
-        $value = (string) $value;
+    /**
+     * Escapes a value for a quoted SQL string literal.
+     */
+    private function escape(string $value): string {
+        global $wpdb;
+
         if ($wpdb->dbh instanceof \mysqli) {
             // esc_sql() uses the connection's charset-aware escaping. It also replaces "%" with a
             // placeholder that is normally removed when a query runs; this text goes to a file instead.
-            return "'" . $wpdb->remove_placeholder_escape(esc_sql($value)) . "'";
+            return $wpdb->remove_placeholder_escape(esc_sql($value));
         }
 
-        return "'" . strtr(
+        return strtr(
             $value,
             array(
                 '\\'   => '\\\\',
@@ -466,6 +711,6 @@ class ChunkedDatabaseDumper {
                 '"'    => '\\"',
                 "\x1a" => '\\Z',
             )
-        ) . "'";
+        );
     }
 }

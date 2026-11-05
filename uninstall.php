@@ -29,6 +29,15 @@ delete_site_transient('slice_backup_dropbox_access');
 wp_clear_scheduled_hook('slice_backup_scheduled_backup');
 wp_unschedule_hook('slice_backup_job_tick');
 
+// The temporary restore guard (normally removed when a restore ends).
+$slice_backup_mu = wp_normalize_path(untrailingslashit(defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins'));
+foreach (array('0-slice-backup-restore-guard.php', 'slice-backup-restore-guard.json') as $slice_backup_guard) {
+    $slice_backup_guard = $slice_backup_mu . '/' . $slice_backup_guard;
+    if (is_file($slice_backup_guard) && strpos((string) file_get_contents($slice_backup_guard, false, null, 0, 600), 'slice-backup-restore-guard') !== false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Reads the header of a local file this plugin wrote.
+        wp_delete_file($slice_backup_guard);
+    }
+}
+
 if (is_multisite()) {
     switch_to_blog(get_main_site_id());
 }

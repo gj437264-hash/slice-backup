@@ -135,7 +135,7 @@ class StreamingArchiver {
             $add(WP_PLUGIN_DIR, 'plugins', 'plugins', array($selfDir));
         }
         if (!empty($components['mu_plugins'])) {
-            $add(defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins', 'mu-plugins', 'mu_plugins', array());
+            $add(defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins', 'mu-plugins', 'mu_plugins', array(RestoreGuard::path(), RestoreGuard::configPath()));
         }
         if (!empty($components['languages'])) {
             $add(defined('WP_LANG_DIR') ? WP_LANG_DIR : WP_CONTENT_DIR . '/languages', 'languages', 'languages', array());

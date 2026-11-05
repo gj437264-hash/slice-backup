@@ -53,6 +53,12 @@ final class Job {
     public $updated = 0;
     /** @var string[] Non-fatal problems collected along the way. */
     public $warnings = array();
+    /**
+     * Crash recovery: per-step slow-down level, and the crashes seen at the current position.
+     *
+     * @var array{levels?: array<string, int>, cursor?: string, crashes?: int, total?: int, lastError?: string, note?: string}
+     */
+    public $recovery = array();
 
     public static function root(): string {
         $dir = Storage::dir() . '/jobs';
@@ -79,7 +85,10 @@ final class Job {
             if (!$active->isStalled()) {
                 throw new \RuntimeException(esc_html__('Another backup or restore is already running. Wait for it to finish or cancel it, then try again.', 'slice-backup'));
             }
-            $active->fail(__('Stopped because it stalled and a new job was started.', 'slice-backup'));
+            // Through the engine, so a stalled restore is ended safely (problem plugins off, guard removed).
+            if (!MigratorEngine::endStalled($active, __('Stopped because it stalled and a new job was started.', 'slice-backup'))) {
+                throw new \RuntimeException(esc_html__('Another backup or restore is still finishing. Try again in a minute.', 'slice-backup'));
+            }
         }
 
         $job          = new self();
@@ -90,6 +99,9 @@ final class Job {
         $job->origin  = $origin;
         $job->token   = wp_generate_password(40, false);
         $job->created = time();
+        // Saved now: a restore replaces siteurl, and background ticks must keep reaching this server.
+        $job->options['_ajaxUrl'] = admin_url('admin-ajax.php');
+        $job->options['_siteUrl'] = home_url();
 
         wp_mkdir_p($job->workDir());
 
@@ -145,14 +157,62 @@ final class Job {
     }
 
     /**
-     * Writes the state atomically (temp file + rename).
+     * Writes the state atomically (temp file + rename). A failed write (full disk)
+     * keeps the previous state file instead of replacing it with a broken one.
      */
     public function save(): void {
         $this->updated = time();
         $file          = $this->workDir() . '/state.json';
         $tmp           = $file . '.tmp';
-        file_put_contents($tmp, (string) wp_json_encode(get_object_vars($this))); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-        @rename($tmp, $file); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename
+        $json          = (string) wp_json_encode(get_object_vars($this));
+        $written       = file_put_contents($tmp, $json); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+        if ($written === strlen($json)) {
+            @rename($tmp, $file); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename
+        } else {
+            wp_delete_file($tmp);
+        }
+    }
+
+    /**
+     * Marks a tick as running. If the PHP process dies without clearing it (fatal error,
+     * out of memory, killed by the host), the next tick finds the marker and knows.
+     */
+    public function markInflight(string $cursor): void {
+        file_put_contents($this->workDir() . '/inflight', $cursor); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+    }
+
+    public function clearInflight(): void {
+        $file = $this->workDir() . '/inflight';
+        if (is_file($file)) {
+            wp_delete_file($file);
+        }
+    }
+
+    /**
+     * The tick that died without clearing its marker: its cursor, and the PHP error the
+     * shutdown handler added (empty when the process was killed outright). Null if none.
+     *
+     * @return array{cursor: string, error: string}|null
+     */
+    public function abandonedInflight(): ?array {
+        $file = $this->workDir() . '/inflight';
+        if (!is_file($file)) {
+            return null;
+        }
+        $parts = explode("\n", (string) file_get_contents($file), 2); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+        return array('cursor' => trim($parts[0]), 'error' => trim($parts[1] ?? ''));
+    }
+
+    /**
+     * Asks the request that is working on the job to cancel it (it holds the tick lock,
+     * so it stops at a safe point and cleans up itself).
+     */
+    public function requestCancel(): void {
+        file_put_contents($this->workDir() . '/cancel.request', (string) time()); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+    }
+
+    public function cancelRequested(): bool {
+        return is_file($this->workDir() . '/cancel.request');
     }
 
     public function workDir(): string {
@@ -240,6 +300,9 @@ final class Job {
             'warnings' => $this->warnings,
             'result'   => $this->status === 'done' ? ($this->data['result'] ?? null) : null,
             'stalled'  => $this->isStalled(),
+            'recovery' => (string) ($this->recovery['note'] ?? ''),
+            'logFile'  => (string) ($this->data['logFile'] ?? ''),
+            'actions'  => $this->status === 'running' ? array() : array_values((array) ($this->data['actions'] ?? array())),
             'origin'   => $this->origin,
             'created'  => $this->created,
             'updated'  => $this->updated,

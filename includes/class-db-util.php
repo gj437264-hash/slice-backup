@@ -30,9 +30,10 @@ final class DbUtil {
     public static function tables(?string $prefix = null): array {
         global $wpdb;
 
-        $prefix = $prefix ?? (string) $wpdb->base_prefix;
-        $rows   = $wpdb->get_results('SHOW FULL TABLES', ARRAY_N);
-        $tables = array();
+        $prefix   = $prefix ?? (string) $wpdb->base_prefix;
+        $internal = self::isInternalTable($prefix . 'x');
+        $rows     = $wpdb->get_results('SHOW FULL TABLES', ARRAY_N);
+        $tables   = array();
 
         foreach ((array) $rows as $row) {
             if (!is_array($row) || !isset($row[0], $row[1])) {
@@ -42,6 +43,10 @@ final class DbUtil {
                 continue;
             }
             $name = (string) $row[0];
+            // Restore staging tables and safety copies are never part of the site's own tables.
+            if (!$internal && self::isInternalTable($name)) {
+                continue;
+            }
             if ($prefix === '' || strpos($name, $prefix) === 0) {
                 $tables[] = $name;
             }
@@ -116,12 +121,13 @@ final class DbUtil {
     /**
      * Lists all options tables (the main one plus one per network site).
      *
+     * @param string|null $base Table prefix (defaults to the site's; a restore passes its staging prefix).
      * @return string[]
      */
-    public static function optionsTables(): array {
+    public static function optionsTables(?string $base = null): array {
         global $wpdb;
 
-        $base   = (string) $wpdb->base_prefix;
+        $base   = $base ?? (string) $wpdb->base_prefix;
         $result = array();
         foreach (self::tables($base) as $table) {
             $rest = substr($table, strlen($base));
@@ -130,6 +136,23 @@ final class DbUtil {
             }
         }
         return $result;
+    }
+
+    /**
+     * Prefix for restore staging tables ("s") or the safety copy kept for undo ("o").
+     */
+    public static function internalPrefix(string $kind): string {
+        do {
+            $prefix = 'slbk' . ($kind === 'o' ? 'o' : 's') . strtolower(wp_generate_password(3, false)) . '_';
+        } while (!empty(self::tables($prefix)));
+        return $prefix;
+    }
+
+    /**
+     * Whether a table belongs to a restore's staging area or safety copy.
+     */
+    public static function isInternalTable(string $name): bool {
+        return (bool) preg_match('/^slbk[so][a-z0-9]{3}_/', $name);
     }
 
     /**

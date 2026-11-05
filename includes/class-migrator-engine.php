@@ -44,6 +44,22 @@ class MigratorEngine {
 
     public const TICK_HOOK = 'slice_backup_job_tick';
 
+    /** Each crash at the same position halves batch sizes and the time budget, down to 1/64. */
+    private const MAX_SLOWDOWN = 6;
+
+    /**
+     * The tick running in this request, so the shutdown handler can record a crash.
+     *
+     * @var array{id: string, cursor: string}|null
+     */
+    private static $inflight = null;
+
+    /** @var string|null Memory set aside so the shutdown handler can still run after "out of memory". */
+    private static $reserve = null;
+
+    /** @var bool */
+    private static $shutdownRegistered = false;
+
     /**
      * @param mixed $value
      */
@@ -234,7 +250,9 @@ class MigratorEngine {
         if ($encrypted) {
             $steps[] = 'decrypt';
         }
-        array_push($steps, 'extract', 'inspect', 'import', 'replace', 'files', 'shield', 'finalize');
+        // The import, address update and plugin/theme copies go to a staging area; the live
+        // site is untouched until "swap" puts everything in place at once.
+        array_push($steps, 'extract', 'inspect', 'import', 'replace', 'files', 'swap', 'shield', 'finalize');
 
         Storage::cleanupStale();
         Job::cleanupOld();
@@ -262,8 +280,28 @@ class MigratorEngine {
             'targetSiteUrl' => untrailingslashit((string) get_option('siteurl')),
             'targetHomeUrl' => untrailingslashit((string) get_option('home')),
             'targetPrefix'  => (string) $wpdb->base_prefix,
+            // This server's settings that must survive the restore (main site on a network).
+            'targetUpload'  => array(
+                'upload_path'     => self::mainSiteOption('upload_path'),
+                'upload_url_path' => self::mainSiteOption('upload_url_path'),
+            ),
+            'targetTheme'   => array((string) get_option('stylesheet'), (string) get_option('template')),
+            // Staging tables are named with this prefix until the swap.
+            'stagePrefix'   => DbUtil::internalPrefix('s'),
+            'actions'       => array(),
             'summary'       => array('skippedEntries' => array(), 'database' => null, 'replace' => null, 'files' => array(), 'notes' => array()),
         );
+
+        $components = array_keys(array_filter($want));
+        RestoreLog::add($job, RestoreLog::INFO, sprintf('Restore of %s started on %s (PHP %s, WordPress %s, memory limit %s).', $filename, home_url(), PHP_VERSION, get_bloginfo('version'), MemoryBudget::limitLabel()), array(
+            'restore'            => $components,
+            'encrypted'          => $encrypted,
+            'isolateConflicts'   => (bool) $job->options['isolate'],
+            'oldUrl'             => $job->options['old_url'],
+            'newUrl'             => $job->options['new_url'],
+            'stagingTablePrefix' => $job->data['stagePrefix'],
+        ));
+        RestoreLog::add($job, RestoreLog::INFO, 'The live site stays as it is until every part is ready; then the database tables and plugin/theme folders are swapped in at once, and the replaced ones are kept as a safety copy for undo.');
         $job->save();
 
         /** Fires when a restore job starts. */
@@ -326,9 +364,31 @@ class MigratorEngine {
     private static function followRemote(Job $job, array $key, array $state, float $deadline, string $label): ?array {
         $first = true;
         while ($first || microtime(true) < $deadline) {
-            $first  = false;
-            $remote = Peer::request($key, 'job', (string) wp_json_encode(array('id' => $state['id'], 'token' => $state['token'])), array(), false, 90)['json'];
-            $p      = (array) ($remote['progress'] ?? array());
+            $first = false;
+            try {
+                $remote = Peer::request($key, 'job', (string) wp_json_encode(array('id' => $state['id'], 'token' => $state['token'])), array(), false, 90)['json'];
+            } catch (PeerError $e) {
+                // The other site's request can die and recover (a server error or timeout while it
+                // works through a heavy step). Keep polling for a while instead of failing here.
+                if ($e->status !== 0 && $e->status < 500) {
+                    throw $e;
+                }
+                if (empty($job->data['remoteErrorSince'])) {
+                    $job->data['remoteErrorSince'] = time();
+                }
+                if (time() - (int) $job->data['remoteErrorSince'] > 10 * MINUTE_IN_SECONDS) {
+                    throw $e;
+                }
+                usleep((int) (1000000 * max(0.0, min(3.0, $deadline - microtime(true)))));
+                $job->progress['detail'] = sprintf(
+                    /* translators: %s: error message. */
+                    __('The other site did not answer (%s). Still waiting for it…', 'slice-backup'),
+                    Plugin::errorText($e)
+                );
+                return null;
+            }
+            unset($job->data['remoteErrorSince']);
+            $p = (array) ($remote['progress'] ?? array());
             self::setProgress($job, $label . ': ' . (string) ($p['label'] ?? ''), ((float) ($p['percent'] ?? 0)) / 100, (string) ($p['detail'] ?? ''));
 
             $status = (string) ($remote['status'] ?? '');
@@ -389,11 +449,39 @@ class MigratorEngine {
             $job = $fresh;
         }
 
+        // Long cleanup may follow (failure or cancel): no time limit, no stop on browser abort.
         self::prepareEnvironment();
-        $deadline = microtime(true) + max(3.0, $budget);
 
+        // The previous tick died without cleaning up: a fatal error, out of memory,
+        // or the host killed the request. Record it and continue in smaller pieces.
+        $abandoned = $job->abandonedInflight();
+        if ($abandoned !== null) {
+            self::recordCrash($job, $abandoned['cursor'], $abandoned['error']);
+            $job->clearInflight();
+        }
+        if ($job->status === 'running' && $job->cancelRequested()) {
+            self::cancelNow($job);
+        }
+        if ($job->status !== 'running') {
+            $job->unlockTick($lock);
+            return $job;
+        }
+
+        RestoreGuard::heartbeat($job);
+
+        $factor = 1 / (2 ** self::slowdown($job));
+        MemoryBudget::setFactor($factor);
+        $budget   = max(3.0, $budget * $factor);
+        $deadline = microtime(true) + $budget;
+
+        self::beginInflight($job);
         try {
             while ($job->status === 'running' && microtime(true) < $deadline) {
+                // Cancel requests are handled here, by the request holding the lock, at a safe point.
+                if ($job->cancelRequested()) {
+                    self::cancelNow($job);
+                    break;
+                }
                 $step = $job->step();
                 if ($step === '') {
                     $job->finish();
@@ -406,19 +494,33 @@ class MigratorEngine {
                 $done      = self::runStep($job, $step, $stepState, $deadline, $budget);
                 $job->state[$step] = $stepState;
 
+                // This step ran without crashing: earlier crashes here were not deterministic.
+                unset($job->recovery['crashes'], $job->recovery['cursor']);
+
                 if ($done) {
                     unset($job->state[$step]);
+                    $since = (int) ($job->data['stepSince'] ?? $job->created);
+                    RestoreLog::add($job, RestoreLog::INFO, sprintf('Step "%s" finished in %s (peak memory %s).', self::stepLabel($step), human_time_diff($since, max($since + 1, time())), size_format((float) memory_get_peak_usage(true))));
+                    $job->data['stepSince'] = time();
                     $job->stepIndex++;
                     if ($job->stepIndex >= count($job->steps)) {
                         $job->finish();
                         break;
                     }
+                    // A new step starts at its own speed.
+                    MemoryBudget::setFactor(1 / (2 ** self::slowdown($job)));
                 }
                 $job->save();
+                self::moveInflight($job);
             }
         } catch (\Throwable $e) {
-            self::onFailure($job, Plugin::errorText($e));
+            if ($job->cancelRequested()) {
+                self::cancelNow($job);
+            } else {
+                self::onFailure($job, Plugin::errorText($e));
+            }
         } finally {
+            self::endInflight($job);
             $job->unlockTick($lock);
         }
 
@@ -426,6 +528,201 @@ class MigratorEngine {
             self::scheduleBackgroundTick($job);
         }
         return $job;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Crash recovery                                                      */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Slow-down level of the current step (0 = full speed).
+     */
+    private static function slowdown(Job $job): int {
+        $levels = (array) ($job->recovery['levels'] ?? array());
+        return max(0, min(self::MAX_SLOWDOWN, (int) ($levels[$job->step()] ?? 0)));
+    }
+
+    /**
+     * Identifies the saved position of the job: a crash at the same cursor means no progress.
+     */
+    private static function cursor(Job $job): string {
+        return md5($job->stepIndex . '|' . (string) wp_json_encode($job->state[$job->step()] ?? null));
+    }
+
+    private static function beginInflight(Job $job): void {
+        if (!self::$shutdownRegistered) {
+            register_shutdown_function(array(__CLASS__, 'onShutdown'));
+            self::$shutdownRegistered = true;
+        }
+        self::$reserve  = str_repeat(' ', MB_IN_BYTES);
+        self::$inflight = array('id' => $job->id, 'cursor' => self::cursor($job), 'marker' => $job->workDir() . '/inflight');
+        $job->markInflight(self::$inflight['cursor']);
+    }
+
+    private static function moveInflight(Job $job): void {
+        if (self::$inflight !== null && $job->status === 'running') {
+            self::$inflight['cursor'] = self::cursor($job);
+            $job->markInflight(self::$inflight['cursor']);
+        }
+    }
+
+    private static function endInflight(Job $job): void {
+        self::$inflight = null;
+        self::$reserve  = null;
+        $job->clearInflight();
+    }
+
+    /**
+     * Runs when PHP stops. If a tick was still running, the request died mid-tick (fatal
+     * error, out of memory, or exit). This handler may have almost no memory left, so it
+     * only adds the error to the in-flight marker and queues a retry; the next tick, with
+     * fresh memory, records the crash and slows down.
+     *
+     * @internal Registered with register_shutdown_function().
+     */
+    public static function onShutdown(): void {
+        if (self::$inflight === null) {
+            return;
+        }
+        self::$reserve  = null;
+        $info           = self::$inflight;
+        self::$inflight = null;
+
+        $error   = error_get_last();
+        $fatal   = is_array($error) && in_array((int) $error['type'], array(E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR), true);
+        $message = $fatal ? str_replace(array("\r", "\n"), ' ', substr((string) $error['message'], 0, 400)) : 'exit';
+
+        file_put_contents((string) $info['marker'], $info['cursor'] . "\n" . $message); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+        if (function_exists('wp_schedule_single_event') && !wp_next_scheduled(self::TICK_HOOK, array((string) $info['id']))) {
+            wp_schedule_single_event(time() + 15, self::TICK_HOOK, array((string) $info['id']));
+        }
+    }
+
+    /**
+     * Records a crashed tick: slows the step down, or stops the job when even the
+     * smallest batches crash at the same position.
+     */
+    private static function recordCrash(Job $job, string $cursor, string $error): void {
+        $step     = $job->step();
+        $recovery = $job->recovery;
+        $levels   = (array) ($recovery['levels'] ?? array());
+        $level    = (int) ($levels[$step] ?? 0);
+        $same     = ($recovery['cursor'] ?? '') === $cursor;
+        $crashes  = $same ? (int) ($recovery['crashes'] ?? 0) + 1 : 1;
+
+        $recovery['cursor']    = $cursor;
+        $recovery['crashes']   = $crashes;
+        $recovery['total']     = (int) ($recovery['total'] ?? 0) + 1;
+        $recovery['lastError'] = substr($error, 0, 500);
+        $reason                = self::crashReason($error);
+
+        if ($level >= self::MAX_SLOWDOWN && $same && $crashes >= 2) {
+            $job->recovery = $recovery;
+            self::onFailure($job, self::crashFailureMessage($job, $error, $reason));
+            return;
+        }
+
+        $levels[$step]      = min(self::MAX_SLOWDOWN, $level + 1);
+        $recovery['levels'] = $levels;
+
+        // The import replays statements after the last saved position. Mark that, and restart a
+        // table without a primary key from its beginning once (its rows cannot reject duplicates).
+        if ($step === 'import' && !empty($job->state['import'])) {
+            $import               = (array) $job->state['import'];
+            $import['afterCrash'] = 1;
+            if (!empty($import['keyless']) && isset($import['tableStart']) && (string) ($import['rewound'] ?? '') !== (string) $import['tableStart']) {
+                $import['pos']     = (float) $import['tableStart'];
+                $import['rewound'] = (float) $import['tableStart'];
+            }
+            $job->state['import'] = $import;
+        }
+        $recovery['note']   = sprintf(
+            /* translators: %s: reason, for example "the server ran out of memory (limit 128M)". */
+            __('Recovered from a server stop (%s). Continuing in smaller pieces.', 'slice-backup'),
+            $reason
+        );
+        $job->recovery = $recovery;
+        RestoreLog::add(
+            $job,
+            RestoreLog::WARNING,
+            sprintf(
+                /* translators: 1: step name, 2: reason. */
+                __('The server stopped the request during "%1$s" (%2$s). The step was resumed from its last saved position with smaller batches.', 'slice-backup'),
+                self::stepLabel($step),
+                $reason
+            ),
+            array('crashesHere' => $crashes, 'slowdownLevel' => $levels[$step], 'phpError' => $error),
+            $crashes > 1 ? __('If this keeps happening on large sites, raise the PHP memory limit or use WP-CLI for restores.', 'slice-backup') : ''
+        );
+        $job->save();
+    }
+
+    private static function crashReason(string $error): string {
+        if (stripos($error, 'Allowed memory size') !== false || stripos($error, 'Out of memory') !== false) {
+            return sprintf(
+                /* translators: %s: PHP memory limit, for example 128M. */
+                __('the server ran out of memory, limit %s', 'slice-backup'),
+                MemoryBudget::limitLabel()
+            );
+        }
+        if (stripos($error, 'Maximum execution time') !== false) {
+            return __('the server time limit was reached', 'slice-backup');
+        }
+        if ($error === '' || $error === 'exit') {
+            return sprintf(
+                /* translators: %s: PHP memory limit, for example 128M. */
+                __('the server stopped the request, usually because of the memory limit (%s) or a time limit', 'slice-backup'),
+                MemoryBudget::limitLabel()
+            );
+        }
+        return wp_strip_all_tags(substr($error, 0, 300));
+    }
+
+    /**
+     * Readable name of a job step, for messages.
+     */
+    private static function stepLabel(string $step): string {
+        $labels = array(
+            'dump'          => __('Exporting the database', 'slice-backup'),
+            'scan'          => __('Finding files', 'slice-backup'),
+            'archive'       => __('Compressing files', 'slice-backup'),
+            'encrypt'       => __('Encrypting the bundle', 'slice-backup'),
+            'decrypt'       => __('Decrypting the bundle', 'slice-backup'),
+            'extract'       => __('Unpacking the bundle', 'slice-backup'),
+            'inspect'       => __('Checking plugins and themes', 'slice-backup'),
+            'import'        => __('Importing the database', 'slice-backup'),
+            'replace'       => __('Updating addresses in the database', 'slice-backup'),
+            'files'         => __('Copying files into place', 'slice-backup'),
+            'swap'          => __('Switching the site over to the restored version', 'slice-backup'),
+            'shield'        => __('Protecting the site from incompatible code', 'slice-backup'),
+            'upload'        => __('Uploading to cloud storage', 'slice-backup'),
+            'download'      => __('Downloading from cloud storage', 'slice-backup'),
+            'push'          => __('Sending to the other site', 'slice-backup'),
+            'remote_export' => __('Creating the backup on the other site', 'slice-backup'),
+            'pull_download' => __('Downloading from the other site', 'slice-backup'),
+            'finalize'      => __('Finishing', 'slice-backup'),
+        );
+        return $labels[$step] ?? $step;
+    }
+
+    private static function crashFailureMessage(Job $job, string $error, string $reason): string {
+        $label = self::stepLabel($job->step());
+        if (stripos($error, 'Allowed memory size') !== false || stripos($error, 'Out of memory') !== false) {
+            $advice = __('Raise the PHP memory limit (for example define( \'WP_MEMORY_LIMIT\', \'512M\' ); in wp-config.php, or ask your host), or run it with WP-CLI, then start again.', 'slice-backup');
+        } elseif ($error === '' || $error === 'exit') {
+            $advice = __('Ask your host to raise the PHP memory limit (WP_MEMORY_LIMIT) or time limit, or run it with WP-CLI, then start again.', 'slice-backup');
+        } elseif (stripos($error, 'Maximum execution time') !== false) {
+            $advice = __('Ask your host to raise the PHP time limit, or run it with WP-CLI, then start again.', 'slice-backup');
+        } else {
+            $advice = __('Run it with WP-CLI to see the full error, or send this message to your host.', 'slice-backup');
+        }
+        return sprintf(
+            /* translators: 1: step name, 2: reason, 3: advice. */
+            __('Stopped at "%1$s": %2$s, even with the smallest batches. %3$s', 'slice-backup'),
+            $label,
+            $reason,
+            $advice
+        );
     }
 
     /**
@@ -459,8 +756,10 @@ class MigratorEngine {
             wp_schedule_single_event($at, self::TICK_HOOK, array($job->id));
         }
 
+        // The URL saved when the job started: after a database import, admin_url() points at the source site.
+        $ajaxUrl = (string) ($job->options['_ajaxUrl'] ?? '');
         wp_remote_post(
-            admin_url('admin-ajax.php'),
+            $ajaxUrl !== '' ? $ajaxUrl : admin_url('admin-ajax.php'),
             array(
                 'timeout'   => 0.01,
                 'blocking'  => false,
@@ -490,22 +789,104 @@ class MigratorEngine {
     /**
      * Cancels the active job and cleans up.
      */
-    public static function cancel(Job $job): void {
-        if ($job->type === 'export' && isset($job->state['upload'])) {
+    public static function cancel(Job $job): bool {
+        // Never clean up while another request is still writing: if a tick holds the lock,
+        // it handles the cancellation itself at its next safe point.
+        $lock = $job->lockTick();
+        if ($lock === null) {
+            $job->requestCancel();
+            return false;
+        }
+        try {
+            $fresh = Job::load($job->id);
+            $job   = $fresh ?? $job;
+            if ($job->status === 'running') {
+                self::prepareEnvironment();
+                self::cancelNow($job);
+            }
+        } finally {
+            $job->unlockTick($lock);
+        }
+        return true;
+    }
+
+    /**
+     * Cancels a job. Call only while holding its tick lock.
+     */
+    private static function cancelNow(Job $job): void {
+        if (in_array($job->type, array('export', 'upload'), true) && isset($job->state['upload'])) {
             Cloud::abortUpload((array) $job->state['upload']);
         }
-        if ($job->type === 'upload' && isset($job->state['upload'])) {
-            Cloud::abortUpload((array) $job->state['upload']);
-        }
+        RestoreLog::add($job, RestoreLog::WARNING, __('Cancelled at the user\'s request.', 'slice-backup'));
+        self::endRestoreSafely($job);
         $job->cancel();
+        RestoreLog::persist($job);
+        $job->save();
         self::cleanupWork($job, true);
+    }
+
+    /**
+     * Ends a job that stopped making progress, safely (a restore leaves a site that boots).
+     * Returns false when another request is still working on it.
+     */
+    public static function endStalled(Job $job, string $message): bool {
+        $lock = $job->lockTick();
+        if ($lock === null) {
+            return false;
+        }
+        try {
+            $fresh = Job::load($job->id);
+            $job   = $fresh ?? $job;
+            if ($job->status === 'running') {
+                self::prepareEnvironment();
+                self::onFailure($job, $message);
+            }
+        } finally {
+            $job->unlockTick($lock);
+        }
+        return true;
+    }
+
+    /**
+     * Runs early on every request while a restore guard is installed: keeps a restore
+     * moving when nobody has the admin page open, and ends one that stopped making
+     * progress for a long time, so the site is never left in maintenance or half-restored.
+     */
+    public static function watchRestore(): void {
+        if (!RestoreGuard::isInstalled()) {
+            return;
+        }
+        $job = Job::active();
+        if ($job === null || $job->type !== 'restore') {
+            // The restore is over but its guard is still there.
+            RestoreGuard::remove();
+            return;
+        }
+        $idle = RestoreGuard::idleSeconds($job);
+        if ($idle === null || $idle < RestoreGuard::KICK_AFTER_SECONDS) {
+            return;
+        }
+        if ($idle > RestoreGuard::MAX_IDLE_SECONDS) {
+            self::endStalled($job, __('The restore stopped making progress for two hours and was ended. Plugins and themes that might not load were switched off so the site works; run the restore again to finish it.', 'slice-backup'));
+            return;
+        }
+        // Nudge it at most once a minute.
+        $kick = $job->workDir() . '/kick';
+        if (!is_file($kick) || (time() - (int) filemtime($kick)) > MINUTE_IN_SECONDS) {
+            @touch($kick); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            self::scheduleBackgroundTick($job);
+        }
     }
 
     private static function onFailure(Job $job, string $message): void {
         if (isset($job->state['upload'])) {
             Cloud::abortUpload((array) $job->state['upload']);
         }
+        RestoreLog::add($job, RestoreLog::ERROR, $message, array('step' => $job->step()));
+        self::endRestoreSafely($job);
         $job->fail($message);
+        RestoreLog::persist($job);
+        $job->save();
         self::cleanupWork($job, true);
 
         if ($job->origin === 'schedule') {
@@ -514,12 +895,266 @@ class MigratorEngine {
     }
 
     /**
+     * A restore that stops early (failure or cancel) must leave a site that works.
+     *
+     * Before the swap the live site was never changed: the staging tables and folders are
+     * simply deleted (an automatic rollback). After the swap the restored site is live:
+     * detected conflicts are switched off, this server's settings are kept, and the safety
+     * copy stays available for undo.
+     */
+    private static function endRestoreSafely(Job $job): void {
+        if ($job->type !== 'restore') {
+            return;
+        }
+        try {
+            RestoreGuard::disableInThisRequest();
+            if (empty($job->data['swapped'])) {
+                self::discardStaging($job);
+                RestoreLog::add($job, RestoreLog::ACTION, __('The restore stopped before the site was switched over, so the live database, plugins and themes were left exactly as they were. The staging copies were deleted.', 'slice-backup'));
+                $want    = (array) ($job->options['want'] ?? array());
+                $inPlace = array_intersect(array('uploads', 'languages', 'wp_core', 'root_files'), array_keys(array_filter($want)));
+                if (!empty($inPlace) && $job->stepIndex >= (int) array_search('files', $job->steps, true)) {
+                    RestoreLog::add(
+                        $job,
+                        RestoreLog::WARNING,
+                        sprintf(
+                            /* translators: %s: list of parts, for example "uploads, languages". */
+                            __('Files of these parts are copied straight into place and may have been partly restored: %s.', 'slice-backup'),
+                            implode(', ', $inPlace)
+                        ),
+                        array(),
+                        __('Run the restore again to finish them, or restore those folders from another backup.', 'slice-backup')
+                    );
+                }
+            } else {
+                $inspector = new CompatibilityInspector();
+                $inspector->setLogger(self::logger($job));
+                if (!empty($job->options['isolate']) && !empty($job->data['report']['items'])) {
+                    $plugins = array();
+                    $themes  = array();
+                    foreach ((array) $job->data['report']['items'] as $item) {
+                        if (($item['status'] ?? '') === 'conflict') {
+                            if (($item['type'] ?? '') === 'plugin') {
+                                $plugins[] = (string) $item['slug'];
+                            } elseif (($item['type'] ?? '') === 'theme') {
+                                $themes[] = (string) $item['slug'];
+                            }
+                        }
+                    }
+                    $self = basename(untrailingslashit(SLICE_BACKUP_PATH));
+                    $inspector->safeBoot(array_values(array_diff(array_unique($plugins), array($self))), array_values(array_unique($themes)));
+                }
+                self::keepTargetSettings($job);
+                RestoreLog::add(
+                    $job,
+                    RestoreLog::WARNING,
+                    __('The restore stopped after the site was switched over to the restored version.', 'slice-backup'),
+                    array(),
+                    __('Check the site. To go back to the site as it was before this restore, use "Undo this restore" on the Restore tab.', 'slice-backup')
+                );
+            }
+        } catch (\Throwable $e) {
+            RestoreLog::add($job, RestoreLog::ERROR, Plugin::errorText($e));
+            $job->warnings[] = Plugin::errorText($e);
+        }
+        RestoreGuard::remove($job);
+    }
+
+    /**
+     * Logger callback for helpers that report what they do.
+     */
+    private static function logger(Job $job): callable {
+        return static function (string $level, string $message, array $context = array(), string $followUp = '') use ($job): void {
+            RestoreLog::add($job, $level, $message, $context, $followUp);
+        };
+    }
+
+    /**
+     * Deletes a restore's staging tables and folders, and puts back any folder that was
+     * already swapped when the restore stopped.
+     */
+    private static function discardStaging(Job $job): void {
+        $swap = (array) ($job->state['swap'] ?? array());
+        self::revertFolderSwaps((array) ($swap['folders'] ?? array()), (int) ($swap['done'] ?? 0));
+
+        $prefix = (string) ($job->data['stagePrefix'] ?? '');
+        if ($prefix !== '' && DbUtil::isInternalTable($prefix . 'x')) {
+            RestoreRollback::dropTables(DbUtil::tables($prefix));
+        }
+        foreach (self::stagingRoots() as $root) {
+            RestoreRollback::delete($root . '/' . RestoreRollback::STAGING_DIR);
+        }
+    }
+
+    /**
+     * Folders (plugins and themes) that are restored by swapping whole folders.
+     *
+     * @return array<string, string> Component => root folder.
+     */
+    private static function stagingRoots(): array {
+        return array(
+            'plugins' => wp_normalize_path(untrailingslashit(WP_PLUGIN_DIR)),
+            'themes'  => wp_normalize_path(untrailingslashit(get_theme_root())),
+        );
+    }
+
+    /**
+     * Undoes folder swaps (also one that stopped half-way between its two moves).
+     * Each swap is: live -> old, then staged -> live. Folders not reached are left alone.
+     *
+     * @param array<int, array<string, mixed>> $folders
+     */
+    private static function revertFolderSwaps(array $folders, int $done): void {
+        $last = min(count($folders) - 1, $done);
+        for ($i = $last; $i >= 0; $i--) {
+            $live   = (string) $folders[$i]['live'];
+            $staged = (string) $folders[$i]['staged'];
+            $old    = (string) $folders[$i]['old'];
+            if (!file_exists($staged) && file_exists($live)) {
+                RestoreRollback::move($live, $staged);
+            }
+            if (file_exists($old) && !file_exists($live)) {
+                RestoreRollback::move($old, $live);
+            }
+        }
+    }
+
+    /**
+     * An option of the main site, read straight from the database (no filters or cache).
+     */
+    private static function mainSiteOption(string $name): string {
+        global $wpdb;
+        $table = is_multisite() ? $wpdb->get_blog_prefix(get_main_site_id()) . 'options' : $wpdb->options;
+        $value = $wpdb->get_var($wpdb->prepare('SELECT option_value FROM %i WHERE option_name = %s', $table, $name));
+        return is_string($value) ? $value : '';
+    }
+
+    /**
+     * Writes this server's upload folder settings back into the main site's options table.
+     * Done straight after the import touches that table, so the backup folder (and the
+     * running job inside it) never moves, with or without the restore guard.
+     *
+     * @param array<string, string> $values
+     */
+    private static function pinUploadSettings(array $values): void {
+        global $wpdb;
+        $table = is_multisite() ? $wpdb->get_blog_prefix(get_main_site_id()) . 'options' : $wpdb->options;
+        foreach ($values as $name => $value) {
+            $wpdb->query($wpdb->prepare('UPDATE %i SET option_value = %s WHERE option_name = %s', $table, (string) $value, (string) $name));
+        }
+        wp_cache_delete('alloptions', 'options');
+        foreach (array_keys($values) as $name) {
+            wp_cache_delete((string) $name, 'options');
+        }
+    }
+
+    /**
+     * After a restore: keep this server's upload folder settings and keep Slice Backup active.
+     */
+    private static function keepTargetSettings(Job $job): void {
+        // Real settings, real writes: the guard's filters must not hide or block them.
+        RestoreGuard::disableInThisRequest();
+        wp_cache_flush();
+
+        if (isset($job->data['targetUpload'])) {
+            self::pinUploadSettings((array) $job->data['targetUpload']);
+            if (empty($job->data['uploadKeptLogged'])) {
+                $job->data['uploadKeptLogged'] = true;
+                RestoreLog::add($job, RestoreLog::INFO, 'This server\'s upload folder settings were kept (the restored ones belong to the source server).', (array) $job->data['targetUpload']);
+            }
+        }
+
+        $basename = plugin_basename(SLICE_BACKUP_FILE);
+        $added    = false;
+        if (is_multisite()) {
+            $network = (array) get_site_option('active_sitewide_plugins', array());
+            $site    = (array) get_option('active_plugins', array());
+            if (!isset($network[$basename]) && !in_array($basename, $site, true)) {
+                $network[$basename] = time();
+                update_site_option('active_sitewide_plugins', $network);
+                $added = true;
+            }
+        } else {
+            $active = array_values(array_filter((array) get_option('active_plugins', array()), 'is_string'));
+            if (!in_array($basename, $active, true)) {
+                $active[] = $basename;
+                sort($active);
+                update_option('active_plugins', $active);
+                $added = true;
+            }
+        }
+        if ($added) {
+            RestoreLog::add($job, RestoreLog::ACTION, __('Slice Backup was not active in the restored site and was activated, so this report and the undo option stay available.', 'slice-backup'));
+        }
+        wp_cache_flush();
+    }
+
+    /**
+     * Moves the staged must-use plugins into place (the last thing a restore does,
+     * so they never load while the restore still needs to run).
+     */
+    private static function placeMuPlugins(Job $job): void {
+        $staging = $job->workDir() . '/mu-staging';
+        if (!is_dir($staging)) {
+            return;
+        }
+        $target = wp_normalize_path(untrailingslashit(defined('WPMU_PLUGIN_DIR') ? (string) WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins'));
+        wp_mkdir_p($target);
+
+        // Must-use plugins cannot be switched off: leave out the ones that would fail on this PHP.
+        $skip = (new CompatibilityInspector())->muPluginConflicts($staging);
+        foreach ($skip as $entry => $issue) {
+            $job->warnings[] = sprintf(
+                /* translators: 1: file or folder name, 2: problem. */
+                __('The must-use plugin "%1$s" was not restored because it would stop the site from loading on this server: %2$s', 'slice-backup'),
+                $entry,
+                $issue
+            );
+            $job->data['report']['items'][] = array(
+                'name'           => $entry,
+                'slug'           => $entry,
+                'type'           => 'mu-plugin',
+                'status'         => 'conflict',
+                'issue'          => $issue,
+                'recommendation' => __('Update it to a version that supports this PHP version, then copy it into wp-content/mu-plugins.', 'slice-backup'),
+                'file'           => $entry,
+                'actionTaken'    => __('Not restored, so the site can load.', 'slice-backup'),
+            );
+            $job->data['report']['summary']['conflictCount']  = (int) ($job->data['report']['summary']['conflictCount'] ?? 0) + 1;
+            $job->data['report']['summary']['totalInspected'] = (int) ($job->data['report']['summary']['totalInspected'] ?? 0) + 1;
+        }
+
+        $copied = 0;
+        $failed = 0;
+        $items  = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($staging, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($items as $item) {
+            $relative = substr(wp_normalize_path($item->getPathname()), strlen(wp_normalize_path($staging)) + 1);
+            $topLevel = strtok($relative, '/');
+            if ($relative === RestoreGuard::FILE || $relative === RestoreGuard::CONFIG_FILE || isset($skip[(string) $topLevel])) {
+                continue;
+            }
+            $dst = $target . '/' . $relative;
+            if ($item->isDir()) {
+                wp_mkdir_p($dst);
+            } elseif (@copy($item->getPathname(), $dst)) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                $copied++;
+            } else {
+                $failed++;
+            }
+        }
+        $job->data['summary']['files']['mu_plugins'] = array('copied' => $copied, 'failed' => $failed);
+    }
+
+    /**
      * Deletes temporary files of a job (keeps state.json).
      */
     private static function cleanupWork(Job $job, bool $failed): void {
         $dir = $job->workDir();
         foreach ((array) scandir($dir) as $entry) {
-            if (!is_string($entry) || in_array($entry, array('.', '..', 'state.json', 'tick.lock'), true)) {
+            if (!is_string($entry) || in_array($entry, array('.', '..', 'state.json', 'tick.lock', 'job.log'), true)) {
                 continue;
             }
             $path = $dir . '/' . $entry;
@@ -820,8 +1455,12 @@ class MigratorEngine {
             case 'files':
                 return self::filesStep($job, $state, $deadline);
 
+            case 'swap':
+                return self::swapStep($job, $state, $deadline);
+
             case 'shield':
                 $report = (array) $job->data['report'];
+                RestoreGuard::disableInThisRequest();
                 (new CompatibilityInspector())->applyShield($report, !empty($job->options['isolate']));
                 $job->data['report'] = $report;
                 self::setProgress($job, __('Protecting the site from incompatible code', 'slice-backup'), 1.0);
@@ -938,6 +1577,16 @@ class MigratorEngine {
         Crypto::seek($handle, (float) $state['pos']);
         $size = max(1.0, Storage::filesize($file));
 
+        // Each tick is a new database session: re-apply the dump's session settings.
+        if ((float) $state['pos'] > 0) {
+            $wpdb->query('SET FOREIGN_KEY_CHECKS = 0');
+            $wpdb->query("SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO'");
+        }
+
+        // Everything goes into staging tables; the live tables are swapped only at the end.
+        $stagePrefix = (string) $job->data['stagePrefix'];
+        $lastSave    = microtime(true);
+
         $query = '';
         $eof   = false;
         $ran   = 0;
@@ -958,31 +1607,80 @@ class MigratorEngine {
                 }
             }
             $query .= $line;
-            if (substr(rtrim($line), -1) !== ';') {
+            $ends   = self::endsStatement($line);
+            $line   = '';
+            if (!$ends) {
                 continue;
             }
 
-            $sql = rtrim($query);
-            $state['pos'] = (float) $state['pos'] + strlen($query);
-            $query        = '';
+            // Hand the statement over without copying it (rows can be many megabytes).
+            $sql    = $query;
+            $query  = '';
+            $length = strlen($sql);
 
-            if ($sourcePrefix !== $targetPrefix) {
-                $sql = self::rewriteTablePrefix($sql, $sourcePrefix, $targetPrefix);
+            $state['pos'] = (float) $state['pos'] + $length;
+
+            $sql = self::rewriteTablePrefix($sql, $sourcePrefix, $stagePrefix);
+            if (!preg_match('/^\s*SET\s/i', $sql)) {
+                // Only statements on staging tables may run: nothing in the bundle can touch a live table.
+                $table = preg_match('/^(?:DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO|UPDATE)\s+`([^`]+)`/', $sql, $m) ? $m[1] : '';
+                if ($table === '' || strpos($table, $stagePrefix) !== 0) {
+                    $state['skipped'] = (int) ($state['skipped'] ?? 0) + 1;
+                    if ((int) $state['skipped'] <= 20) {
+                        RestoreLog::add($job, RestoreLog::WARNING, __('A statement in the database file was skipped because it does not write a WordPress table of the bundle.', 'slice-backup'), array('statement' => substr($sql, 0, 120)));
+                    }
+                    unset($sql);
+                    continue;
+                }
+                if (strncmp($sql, 'CREATE TABLE', 12) === 0 && strlen($table) > 64) {
+                    throw new \RuntimeException(esc_html(sprintf(
+                        /* translators: %s: table name. */
+                        __('The table name %s is too long to restore safely (MySQL allows 64 characters). Nothing on the live site was changed.', 'slice-backup'),
+                        substr($table, strlen($stagePrefix))
+                    )));
+                }
             }
-            if (!empty($state['fixCollation']) && strpos($sql, 'utf8mb4_0900_') !== false) {
+            if (!empty($state['fixCollation']) && strncmp($sql, 'CREATE TABLE', 12) === 0 && strpos($sql, 'utf8mb4_0900_') !== false) {
                 $sql = (string) preg_replace('/utf8mb4_0900_[a-z_]+/', 'utf8mb4_unicode_520_ci', $sql);
+            }
+            $isDdl = strncmp($sql, 'DROP', 4) === 0 || strncmp($sql, 'CREATE', 6) === 0;
+            if (strncmp($sql, 'DROP TABLE', 10) === 0) {
+                // Start of a table: where a replay after a crash can safely restart it.
+                $state['tableStart'] = (float) $state['pos'] - $length;
+                unset($state['keyless'], $state['afterCrash']);
+            } elseif (strncmp($sql, 'CREATE TABLE', 12) === 0) {
+                $state['keyless'] = stripos($sql, 'PRIMARY KEY') === false && stripos($sql, 'UNIQUE') === false;
             }
 
             $wpdb->check_current_query = false;
             if ($wpdb->query($sql) === false) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Restoring runs the statements of the bundle's own SQL dump (values escaped when it was written). Only administrators can start a restore.
-                $state['errors']++;
-                if (count($state['errorSamples']) < 5) {
-                    $state['errorSamples'][] = substr((string) $wpdb->last_error, 0, 300);
+                $error = (string) $wpdb->last_error;
+                if (!empty($state['afterCrash']) && stripos($error, 'Duplicate entry') !== false) {
+                    // Rows already written before the crash: expected, not an error.
+                    $state['replayed'] = (int) ($state['replayed'] ?? 0) + 1;
+                } else {
+                    $state['errors']++;
+                    if (count($state['errorSamples']) < 5) {
+                        $state['errorSamples'][] = substr($error, 0, 300);
+                    }
+                    if ($state['errors'] <= 100) {
+                        RestoreLog::add($job, RestoreLog::WARNING, __('A database statement failed and was skipped; the import continued.', 'slice-backup'), array('error' => substr($error, 0, 300), 'statement' => substr($sql, 0, 160)));
+                    }
                 }
             }
             $state['statements']++;
             $ran++;
+            unset($sql);
             DbUtil::releaseMemory();
+
+            // Save the position often, so a crash replays at most a couple of seconds of statements.
+            if ($isDdl || microtime(true) - $lastSave >= 2.0) {
+                self::checkpoint($job, 'import', $state);
+                $lastSave = microtime(true);
+                if ($job->cancelRequested()) {
+                    break;
+                }
+            }
         }
         fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
@@ -1005,37 +1703,85 @@ class MigratorEngine {
 
         $wpdb->set_sql_mode();
         if ($sourcePrefix !== $targetPrefix) {
-            self::renamePrefixedKeys($sourcePrefix, $targetPrefix);
+            self::renamePrefixedKeys($sourcePrefix, $targetPrefix, $stagePrefix);
             $job->data['summary']['notes'][] = sprintf(
                 /* translators: 1: source table prefix, 2: this site's table prefix. */
                 __('Table prefix converted from "%1$s" to "%2$s".', 'slice-backup'),
                 $sourcePrefix,
                 $targetPrefix
             );
+            RestoreLog::add($job, RestoreLog::INFO, sprintf('Table prefix converted from "%s" to "%s" (including user role and capability keys).', $sourcePrefix, $targetPrefix));
         }
-        wp_cache_flush();
 
-        $job->data['dbRestored']           = true;
+        $job->data['dbStaged']            = true;
         $job->data['summary']['database'] = array(
             'statements'   => (int) $state['statements'],
             'errors'       => (int) $state['errors'],
             'errorSamples' => (array) $state['errorSamples'],
         );
+        RestoreLog::add($job, RestoreLog::INFO, sprintf('Database imported into staging tables: %d statements, %d errors, %d replayed after a server stop, %d skipped.', (int) $state['statements'], (int) $state['errors'], (int) ($state['replayed'] ?? 0), (int) ($state['skipped'] ?? 0)));
+        if ((int) $state['errors'] > 0) {
+            RestoreLog::add(
+                $job,
+                RestoreLog::WARNING,
+                sprintf(
+                    /* translators: %d: number of errors. */
+                    _n('%d database statement failed during the import; the rest was restored.', '%d database statements failed during the import; the rest was restored.', (int) $state['errors'], 'slice-backup'),
+                    (int) $state['errors']
+                ),
+                array('firstErrors' => (array) $state['errorSamples']),
+                __('Check the listed errors in the full log; they usually concern a plugin table that this server\'s database version does not support.', 'slice-backup')
+            );
+        }
         return true;
+    }
+
+    /**
+     * Saves a step's position mid-step, so a crash does not repeat work already done.
+     *
+     * @param array<string, mixed> $state
+     */
+    private static function checkpoint(Job $job, string $step, array $state): void {
+        $job->state[$step] = $state;
+        $job->save();
+        self::moveInflight($job);
+    }
+
+    /**
+     * Whether a line ends an SQL statement (last non-whitespace character is ";"),
+     * checked without copying the line.
+     */
+    private static function endsStatement(string $line): bool {
+        for ($i = strlen($line) - 1; $i >= 0; $i--) {
+            $char = $line[$i];
+            if ($char !== "\n" && $char !== "\r" && $char !== ' ' && $char !== "\t") {
+                return $char === ';';
+            }
+        }
+        return false;
     }
 
     /**
      * @param array<string, mixed> $state
      */
     private static function replaceStep(Job $job, array &$state, float $deadline): bool {
-        if (empty($job->data['dbRestored'])) {
+        if (empty($job->data['dbStaged'])) {
             return true;
         }
 
-        $replacer = new RecursiveSearchReplace();
+        $stagePrefix = (string) $job->data['stagePrefix'];
+        $replacer    = new RecursiveSearchReplace();
         if (empty($state)) {
-            $state = $replacer->begin(self::urlPairs($job));
+            // The staging tables are updated, before anything goes live.
+            $state = $replacer->begin(self::urlPairs($job), DbUtil::tables($stagePrefix));
         }
+        // Save after every window: replacing the same rows twice can corrupt addresses
+        // (for example when the new address contains the old one).
+        $replacer->setCheckpoint(
+            static function (array $windowState) use ($job): void {
+                self::checkpoint($job, 'replace', $windowState);
+            }
+        );
         $done  = $replacer->step($state, $deadline);
         $total = max(1, count($state['tables']));
         self::setProgress(
@@ -1058,14 +1804,34 @@ class MigratorEngine {
             $oldDomain = (string) $job->options['old_network_domain'] !== '' ? (string) $job->options['old_network_domain'] : (string) ($manifest['multisite']['network_domain'] ?? '');
             $newDomain = (string) $job->options['new_network_domain'] !== '' ? (string) $job->options['new_network_domain'] : (defined('DOMAIN_CURRENT_SITE') ? (string) DOMAIN_CURRENT_SITE : '');
             if ($oldDomain !== '' && $newDomain !== '' && $oldDomain !== $newDomain) {
-                $replacer->replaceMultisiteNetworkDomain($oldDomain, $newDomain);
+                $replacer->replaceMultisiteNetworkDomain($oldDomain, $newDomain, $stagePrefix);
                 $stats['networkDomain'] = array('from' => $oldDomain, 'to' => $newDomain);
+                RestoreLog::add($job, RestoreLog::INFO, sprintf('Network domain changed from %s to %s.', $oldDomain, $newDomain));
             }
         }
 
-        delete_option('rewrite_rules');
-        wp_cache_flush();
+        // Permalink rules are rebuilt by WordPress for the new address.
+        global $wpdb;
+        foreach (DbUtil::optionsTables($stagePrefix) as $table) {
+            $wpdb->query($wpdb->prepare('DELETE FROM %i WHERE option_name = %s', $table, 'rewrite_rules'));
+        }
         $job->data['summary']['replace'] = $stats;
+        if ($stats['from'] !== '' && $stats['from'] !== $stats['to']) {
+            RestoreLog::add($job, RestoreLog::INFO, sprintf('Addresses changed from %s to %s: %d rows updated in %d tables, %d malformed serialized values left unchanged, %d errors.', $stats['from'], $stats['to'], (int) $stats['rowsUpdated'], (int) $stats['tables'], (int) $stats['skippedSerialized'], (int) $stats['errors']));
+        }
+        if (!empty($stats['skippedSerialized'])) {
+            RestoreLog::add(
+                $job,
+                RestoreLog::WARNING,
+                sprintf(
+                    /* translators: %d: number of values. */
+                    __('%d stored values were damaged (malformed serialized data) and could not have their addresses updated.', 'slice-backup'),
+                    (int) $stats['skippedSerialized']
+                ),
+                array(),
+                __('These values were already damaged on the source site. If a plugin setting looks wrong, re-save that plugin\'s settings.', 'slice-backup')
+            );
+        }
         return true;
     }
 
@@ -1105,9 +1871,13 @@ class MigratorEngine {
             $uploads = wp_upload_dir(null, false);
             $targets = array(
                 'uploads'    => array('uploads', (string) $uploads['basedir']),
-                'plugins'    => array('plugins', WP_PLUGIN_DIR),
-                'themes'     => array('themes', get_theme_root()),
-                'mu_plugins' => array('mu-plugins', defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins'),
+                // Plugins and themes are copied into staging folders and swapped in whole at the end,
+                // so a plugin is never half there while the site runs.
+                'plugins'    => array('plugins', self::stagingRoots()['plugins'] . '/' . RestoreRollback::STAGING_DIR),
+                'themes'     => array('themes', self::stagingRoots()['themes'] . '/' . RestoreRollback::STAGING_DIR),
+                // Must-use plugins load on every request and cannot be held back by the restore
+                // guard, so they are staged here and moved into place when the restore ends.
+                'mu_plugins' => array('mu-plugins', $job->workDir() . '/mu-staging'),
                 'languages'  => array('languages', defined('WP_LANG_DIR') ? WP_LANG_DIR : WP_CONTENT_DIR . '/languages'),
                 'wp_core'    => array('core', untrailingslashit(ABSPATH)),
             );
@@ -1119,6 +1889,10 @@ class MigratorEngine {
                 }
             }
             $state = array('queue' => $queue, 'stats' => array(), 'done' => 0);
+            // Leftovers of an earlier, interrupted restore.
+            foreach (self::stagingRoots() as $root) {
+                RestoreRollback::delete($root . '/' . RestoreRollback::STAGING_DIR);
+            }
 
             if (!empty($want['root_files']) && is_dir($extract . '/root')) {
                 $notes = (array) $job->data['summary']['notes'];
@@ -1139,10 +1913,19 @@ class MigratorEngine {
             if (!isset($state['stats'][$key])) {
                 $state['stats'][$key] = array('copied' => 0, 'failed' => 0);
             }
+            // Remember which plugin and theme folders are being overwritten: if the restore stops
+            // early, exactly these may be incomplete and must not be loaded.
+            if (empty($item['top']) && in_array($key, array('plugins', 'themes'), true)) {
+                $root = $extract . '/' . $key . '/';
+                $slug = strtok(substr((string) $item['src'], strlen($root)), '/');
+                if (is_string($slug) && $slug !== '') {
+                    $state['started'][$key][$slug] = true;
+                }
+            }
 
             $count = count($entries);
             for ($i = (int) $item['i']; $i < $count; $i++) {
-                if ($copies > 0 && microtime(true) >= $deadline) {
+                if ($copies > 0 && (microtime(true) >= $deadline || ($copies % 50 === 0 && $job->cancelRequested()))) {
                     $state['queue'][0]['i'] = $i;
                     break 2;
                 }
@@ -1150,6 +1933,9 @@ class MigratorEngine {
                 $name = $entries[$i];
                 // Never overwrite this plugin while it is running.
                 if (!empty($item['top']) && $key === 'plugins' && $name === $self) {
+                    continue;
+                }
+                if (!empty($item['top']) && $key === 'mu_plugins' && in_array($name, array(RestoreGuard::FILE, RestoreGuard::CONFIG_FILE), true)) {
                     continue;
                 }
                 $src = $item['src'] . '/' . $name;
@@ -1161,6 +1947,9 @@ class MigratorEngine {
                     $state['done']++;
                 } else {
                     $state['stats'][$key]['failed']++;
+                    if ($state['stats'][$key]['failed'] <= 50) {
+                        RestoreLog::add($job, RestoreLog::WARNING, __('A file could not be copied; the restore continued.', 'slice-backup'), array('file' => substr($dst, strlen(wp_normalize_path(ABSPATH)))));
+                    }
                 }
             }
             array_shift($state['queue']);
@@ -1179,6 +1968,177 @@ class MigratorEngine {
             return false;
         }
         $job->data['summary']['files'] = $state['stats'];
+        foreach ((array) $state['stats'] as $component => $stats) {
+            RestoreLog::add($job, RestoreLog::INFO, sprintf('Files of "%s": %d copied, %d failed%s.', $component, (int) ($stats['copied'] ?? 0), (int) ($stats['failed'] ?? 0), in_array($component, array('plugins', 'themes', 'mu_plugins'), true) ? ' (staged; put in place at the switch-over)' : ''));
+            if (!empty($stats['failed'])) {
+                RestoreLog::add(
+                    $job,
+                    RestoreLog::WARNING,
+                    sprintf(
+                        /* translators: 1: number of files, 2: part of the site. */
+                        __('%1$d files of "%2$s" could not be copied.', 'slice-backup'),
+                        (int) $stats['failed'],
+                        $component
+                    ),
+                    array(),
+                    __('Check free disk space and folder permissions; the file names are in the full log.', 'slice-backup')
+                );
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Switches the site over to the restored version: plugin and theme folders and the
+     * database tables are swapped in, and the replaced ones are kept as a safety copy.
+     * Resumable: every folder move is saved before the next one, and the table swap is a
+     * single atomic statement on MySQL.
+     *
+     * @param array<string, mixed> $state
+     * @throws \Throwable When the swap fails (everything already swapped is put back first).
+     */
+    private static function swapStep(Job $job, array &$state, float $deadline): bool {
+        if (empty($state)) {
+            // From here on, requests load only this plugin and visitors see a maintenance page.
+            if (RestoreGuard::install($job)) {
+                RestoreLog::add($job, RestoreLog::INFO, 'Maintenance mode on: visitors see a "back in a few minutes" page; only Slice Backup loads until the restore ends.');
+            }
+            // Only one safety copy is kept: the previous restore's copy makes room for this one.
+            if (RestoreRollback::load() !== null) {
+                $old = RestoreRollback::discard();
+                RestoreLog::add($job, RestoreLog::ACTION, sprintf(
+                    /* translators: 1: number of tables, 2: number of folders. */
+                    __('The safety copy from the previous restore was deleted (%1$d tables, %2$d folders); this restore keeps a new one.', 'slice-backup'),
+                    $old['tables'],
+                    $old['folders']
+                ));
+            }
+            $folders = array();
+            foreach (self::stagingRoots() as $component => $root) {
+                RestoreRollback::delete($root . '/' . RestoreRollback::OLD_DIR);
+                $staging = $root . '/' . RestoreRollback::STAGING_DIR;
+                foreach (is_dir($staging) ? (array) scandir($staging) : array() as $entry) {
+                    if (!is_string($entry) || $entry === '.' || $entry === '..') {
+                        continue;
+                    }
+                    $folders[] = array(
+                        'component' => $component,
+                        'staged'    => $staging . '/' . $entry,
+                        'live'      => $root . '/' . $entry,
+                        'old'       => $root . '/' . RestoreRollback::OLD_DIR . '/' . $entry,
+                    );
+                }
+            }
+            $state = array('phase' => 'folders', 'folders' => $folders, 'done' => 0);
+            self::checkpoint($job, 'swap', $state);
+        }
+
+        if ($state['phase'] === 'folders') {
+            $count = count($state['folders']);
+            for ($i = (int) $state['done']; $i < $count; $i++) {
+                $folder = $state['folders'][$i];
+                try {
+                    if (file_exists($folder['staged'])) {
+                        if (file_exists($folder['live']) && !RestoreRollback::move($folder['live'], $folder['old'])) {
+                            throw new \RuntimeException(esc_html(sprintf(
+                                /* translators: %s: folder path. */
+                                __('Could not move %s aside. Check folder permissions.', 'slice-backup'),
+                                $folder['live']
+                            )));
+                        }
+                        if (!RestoreRollback::move($folder['staged'], $folder['live'])) {
+                            throw new \RuntimeException(esc_html(sprintf(
+                                /* translators: %s: folder path. */
+                                __('Could not put %s in place. Check folder permissions.', 'slice-backup'),
+                                $folder['live']
+                            )));
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    self::revertFolderSwaps($state['folders'], $i);
+                    $state['done'] = 0;
+                    throw $e;
+                }
+                $state['folders'][$i]['hadOld'] = file_exists($folder['old']);
+                $state['done']                   = $i + 1;
+                self::checkpoint($job, 'swap', $state);
+            }
+            $state['phase'] = 'tables';
+            self::checkpoint($job, 'swap', $state);
+            RestoreLog::add($job, RestoreLog::INFO, sprintf('%d plugin and theme folders put in place; the folders they replaced are kept as a safety copy.', $count));
+        }
+
+        if ($state['phase'] === 'tables') {
+            if (empty($state['tables'])) {
+                $stagePrefix = (string) $job->data['stagePrefix'];
+                $target      = (string) $job->data['targetPrefix'];
+                $oldPrefix   = DbUtil::internalPrefix('o');
+                $live        = array_flip(DbUtil::tables($target));
+                $tables      = array();
+                $pairs       = array();
+                foreach (!empty($job->data['dbStaged']) ? DbUtil::tables($stagePrefix) : array() as $staged) {
+                    $rest  = substr($staged, strlen($stagePrefix));
+                    $name  = $target . $rest;
+                    $old   = isset($live[$name]) ? $oldPrefix . $rest : null;
+                    if ($old !== null) {
+                        $pairs[] = array($name, $old);
+                    }
+                    $pairs[]  = array($staged, $name);
+                    $tables[] = array('live' => $name, 'old' => $old);
+                }
+                $state['tables'] = $tables;
+                $state['pairs']  = $pairs;
+                $state['oldPrefix'] = $oldPrefix;
+                // Planned and saved before running, so a crash right after the swap is recognised.
+                self::checkpoint($job, 'swap', $state);
+            }
+
+            $stillStaged = !empty($state['pairs']) && !empty(DbUtil::tables((string) $job->data['stagePrefix']));
+            if ($stillStaged) {
+                try {
+                    RestoreRollback::renameTables((array) $state['pairs']);
+                } catch (\Throwable $e) {
+                    self::revertFolderSwaps($state['folders'], count($state['folders']));
+                    $state['done'] = 0;
+                    $state['phase'] = 'folders';
+                    throw $e;
+                }
+            }
+            if (!empty($state['pairs'])) {
+                $job->data['dbRestored'] = true;
+                wp_cache_flush();
+                $replaced = count(array_filter($state['tables'], static function ($t): bool {
+                    return $t['old'] !== null;
+                }));
+                RestoreLog::add($job, RestoreLog::ACTION, sprintf(
+                    /* translators: 1: number of tables, 2: number of new tables. */
+                    __('The database was switched over in one step: %1$d tables replaced, %2$d added. The replaced tables are kept as a safety copy.', 'slice-backup'),
+                    $replaced,
+                    count($state['tables']) - $replaced
+                ), array('safetyCopyPrefix' => $state['oldPrefix']));
+                self::keepTargetSettings($job);
+            }
+            $state['phase'] = 'record';
+            self::checkpoint($job, 'swap', $state);
+        }
+
+        // The safety copy: what to put back on undo.
+        $folders = array();
+        foreach ((array) $state['folders'] as $folder) {
+            $folders[] = array('live' => $folder['live'], 'old' => !empty($folder['hadOld']) ? $folder['old'] : null);
+        }
+        RestoreRollback::save(array(
+            'created'    => time(),
+            'job'        => $job->id,
+            'bundle'     => (string) $job->options['filename'],
+            'basePrefix' => (string) $job->data['targetPrefix'],
+            'oldPrefix'  => (string) ($state['oldPrefix'] ?? ''),
+            'tables'     => (array) ($state['tables'] ?? array()),
+            'folders'    => $folders,
+        ));
+        $job->data['swapped'] = true;
+        RestoreLog::add($job, RestoreLog::INFO, 'Safety copy recorded: "Undo this restore" on the Restore tab (or wp slice-backup rollback) puts the previous database, plugins and themes back.');
+        self::setProgress($job, self::stepLabel('swap'), 1.0);
         return true;
     }
 
@@ -1224,6 +2184,23 @@ class MigratorEngine {
                 break;
 
             case 'restore':
+                // Real settings from here on: the guard's filters would hide them.
+                RestoreGuard::disableInThisRequest();
+                if (!empty($job->data['dbRestored'])) {
+                    self::keepTargetSettings($job);
+                    // The restored database may name a theme that is not on this server.
+                    $missing = (new CompatibilityInspector())->safeBoot(array(), array(), (array) ($job->data['targetTheme'] ?? array()));
+                    if (!empty($missing)) {
+                        $job->warnings[] = sprintf(
+                            /* translators: %s: theme folder name. */
+                            __('The restored site uses the theme "%s", which is not installed here, so another theme was switched on. Upload that theme and activate it.', 'slice-backup'),
+                            implode(', ', $missing)
+                        );
+                    }
+                }
+                self::placeMuPlugins($job);
+                RestoreGuard::remove($job);
+
                 $result = array(
                     'success'             => true,
                     'message'             => __('Restore finished.', 'slice-backup'),
@@ -1289,7 +2266,7 @@ class MigratorEngine {
      */
     public static function rewriteTablePrefix(string $sql, string $from, string $to): string {
         $quoted    = preg_quote($from, '/');
-        $rewritten = preg_replace('/^(DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO)(\s+)`' . $quoted . '/', '$1$2`' . $to, $sql, 1);
+        $rewritten = preg_replace('/^(DROP TABLE IF EXISTS|CREATE TABLE|INSERT INTO|UPDATE)(\s+)`' . $quoted . '/', '$1$2`' . $to, $sql, 1);
         if (is_string($rewritten)) {
             $sql = $rewritten;
         }
@@ -1305,11 +2282,11 @@ class MigratorEngine {
     /**
      * Renames prefix-carrying keys (wp_capabilities, wp_user_roles, ...).
      */
-    private static function renamePrefixedKeys(string $from, string $to): void {
+    private static function renamePrefixedKeys(string $from, string $to, string $tablePrefix): void {
         global $wpdb;
 
         $quoted   = preg_quote($from, '/');
-        $usermeta = $to . 'usermeta';
+        $usermeta = $tablePrefix . 'usermeta';
         $metaKeys = '(capabilities|user_level|user-settings|user-settings-time|dashboard_quick_press_last_post_id|persisted_preferences|media_library_mode)';
 
         $rows = $wpdb->get_results($wpdb->prepare('SELECT umeta_id, meta_key FROM %i WHERE meta_key LIKE %s', $usermeta, $wpdb->esc_like($from) . '%')); // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- One-time rename after a restore.
@@ -1319,7 +2296,7 @@ class MigratorEngine {
             }
         }
 
-        foreach (DbUtil::optionsTables() as $table) {
+        foreach (DbUtil::optionsTables($tablePrefix) as $table) {
             $options = $wpdb->get_results($wpdb->prepare('SELECT option_id, option_name FROM %i WHERE option_name LIKE %s', $table, $wpdb->esc_like($from) . '%user_roles'));
             foreach ((array) $options as $option) {
                 if (preg_match('/^' . $quoted . '(\d+_)?user_roles$/', (string) $option->option_name, $m)) {

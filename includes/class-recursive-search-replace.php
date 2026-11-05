@@ -31,6 +31,21 @@ class RecursiveSearchReplace {
     private $skippedSerialized = 0;
 
     /**
+     * Called with the state after every finished window, so the caller can save the position
+     * (a crash must not apply the same replacement twice).
+     *
+     * @var callable|null
+     */
+    private $onWindow = null;
+
+    /**
+     * @param callable|null $onWindow Receives the state array after each window.
+     */
+    public function setCheckpoint(?callable $onWindow): void {
+        $this->onWindow = $onWindow;
+    }
+
+    /**
      * Builds the replacement pairs for a URL move: the URL itself, its JSON-escaped form
      * (used by the block editor and page builders), and the other http/https scheme.
      *
@@ -81,7 +96,7 @@ class RecursiveSearchReplace {
      * @param array<string, string> $pairs
      * @return array<string, mixed>
      */
-    public function begin(array $pairs): array {
+    public function begin(array $pairs, ?array $tables = null): array {
         $pairs = array_filter(
             $pairs,
             static function ($to, $from): bool {
@@ -92,7 +107,7 @@ class RecursiveSearchReplace {
 
         return array(
             'pairs'  => $pairs,
-            'tables' => empty($pairs) ? array() : DbUtil::tables(),
+            'tables' => empty($pairs) ? array() : ($tables ?? DbUtil::tables()),
             'ti'     => 0,
             'last'   => null,
             'stats'  => array(
@@ -173,6 +188,14 @@ class RecursiveSearchReplace {
             }
             $select = 'SELECT ' . implode(', ', $fields) . $wpdb->prepare(' FROM %i', $table);
 
+            // Sizes of the matching rows' text columns, used to load only what fits the memory budget.
+            $lengths = array();
+            foreach ($columns as $col) {
+                $lengths[] = $wpdb->prepare('COALESCE(LENGTH(%i), 0)', $col);
+            }
+            $measure = $wpdb->prepare('SELECT %i AS k, (', $pk['column']) . implode(' + ', $lengths) . $wpdb->prepare(') AS b FROM %i', $table);
+            $cap     = MemoryBudget::rowCap(self::ROWS_PER_QUERY);
+
             $last   = $state['last'];
             $chunks = 0;
             while (true) {
@@ -184,20 +207,55 @@ class RecursiveSearchReplace {
                     @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running step; each step is still time-budgeted.
                 }
 
-                $where = $match;
+                $after = '';
                 if ($last !== null) {
-                    $where .= ' AND ' . ($pk['numeric']
+                    $after = ' AND ' . ($pk['numeric']
                         ? $wpdb->prepare('%i > %d', $pk['column'], $last)
                         : $wpdb->prepare('%i > %s', $pk['column'], $last));
                 }
 
-                $sql  = $select . ' WHERE ' . $where . $wpdb->prepare(' ORDER BY %i ASC LIMIT %d', $pk['column'], self::ROWS_PER_QUERY);
-                $rows = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
-                if (empty($rows)) {
+                $sizes = $wpdb->get_results($measure . ' WHERE ' . $match . $after . $wpdb->prepare(' ORDER BY %i ASC LIMIT %d', $pk['column'], $cap), ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+                $this->failOnDbError($table);
+                DbUtil::releaseMemory();
+                if (empty($sizes)) {
                     break;
                 }
+                $take  = MemoryBudget::fit($sizes);
+                $upper = $pk['numeric'] ? (int) $sizes[$take - 1]['k'] : (string) $sizes[$take - 1]['k'];
+                $final = $take === count($sizes) && count($sizes) < $cap;
+                $first = (int) $sizes[0]['b'];
+                unset($sizes);
 
-                foreach ($rows as $row) {
+                if ($take === 1 && $first > max(MB_IN_BYTES, (int) (MemoryBudget::batchBytes() / 2))) {
+                    // One very large row: replace column by column, inside the database where possible.
+                    $result = $this->replaceInLargeRow($table, $pk, $upper, $columns, $pairs);
+                    if ($result === false) {
+                        $stats['errors']++;
+                    } elseif ($result) {
+                        $stats['rowsUpdated']++;
+                    }
+                    $last          = $upper;
+                    $state['last'] = $last;
+                    if ($this->onWindow !== null) {
+                        ($this->onWindow)($state);
+                    }
+                    if ($final) {
+                        break;
+                    }
+                    continue;
+                }
+
+                $until = $pk['numeric']
+                    ? $wpdb->prepare(' AND %i <= %d', $pk['column'], $upper)
+                    : $wpdb->prepare(' AND %i <= %s', $pk['column'], $upper);
+                $sql   = $select . ' WHERE ' . $match . $after . $until . $wpdb->prepare(' ORDER BY %i ASC', $pk['column']);
+                $rows  = $wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+                $this->failOnDbError($table);
+                DbUtil::releaseMemory();
+
+                foreach (array_keys((array) $rows) as $index) {
+                    $row = $rows[$index];
+                    unset($rows[$index]);
                     $changes = array();
                     foreach ($columns as $col) {
                         if (!isset($row[$col]) || !is_string($row[$col])) {
@@ -207,6 +265,7 @@ class RecursiveSearchReplace {
                         if ($updated !== $row[$col]) {
                             $changes[$col] = $updated;
                         }
+                        unset($updated);
                     }
                     if (!empty($changes)) {
                         if ($wpdb->update($table, $changes, array($pk['column'] => $row[$pk['column']])) === false) {
@@ -214,16 +273,18 @@ class RecursiveSearchReplace {
                         } else {
                             $stats['rowsUpdated']++;
                         }
+                        DbUtil::releaseMemory();
                     }
+                    unset($row, $changes);
                 }
-
-                $lastRow = end($rows);
-                $last    = $pk['numeric'] ? (int) $lastRow[$pk['column']] : (string) $lastRow[$pk['column']];
-                $count   = count($rows);
                 unset($rows);
-                DbUtil::releaseMemory();
 
-                if ($count < self::ROWS_PER_QUERY) {
+                $last          = $upper;
+                $state['last'] = $last;
+                if ($this->onWindow !== null) {
+                    ($this->onWindow)($state);
+                }
+                if ($final) {
                     break;
                 }
             }
@@ -233,9 +294,265 @@ class RecursiveSearchReplace {
     }
 
     /**
+     * A failed read must not be mistaken for "no more rows" (old addresses would stay behind).
+     *
+     * @throws \RuntimeException With the database error.
+     */
+    private function failOnDbError(string $table): void {
+        global $wpdb;
+        $error = (string) $wpdb->last_error;
+        if ($error !== '') {
+            throw new \RuntimeException(
+                esc_html(/* translators: 1: table name, 2: database error. */
+                sprintf(__('Updating addresses in table %1$s failed: %2$s', 'slice-backup'), $table, $error))
+            );
+        }
+    }
+
+    /** Values up to this many characters are replaced in PHP; longer ones are handled in pieces. */
+    private const LARGE_VALUE_CHARS = 1048576;
+
+    /**
+     * Replaces in one very large row without loading the whole row:
+     *  - small columns are loaded one at a time and replaced in PHP as usual;
+     *  - large plain-text columns (HTML, JSON) are replaced by the database with REPLACE(),
+     *    so they never enter PHP memory;
+     *  - large serialized columns must be loaded, because their string lengths need recounting.
+     *
+     * @param array{column: string, numeric: bool} $pk
+     * @param int|string                           $key
+     * @param string[]                             $columns
+     * @param array<string, string>                $pairs
+     * @return bool|null True when the row changed, null when unchanged, false on a database error.
+     */
+    private function replaceInLargeRow(string $table, array $pk, $key, array $columns, array $pairs) {
+        global $wpdb;
+
+        $byKey = $pk['numeric'] ? $wpdb->prepare(' WHERE %i = %d', $pk['column'], $key) : $wpdb->prepare(' WHERE %i = %s', $pk['column'], $key);
+
+        // Longest search string first, like strtr().
+        uksort(
+            $pairs,
+            static function ($a, $b): int {
+                return strlen((string) $b) <=> strlen((string) $a);
+            }
+        );
+
+        $changed = null;
+        foreach ($columns as $col) {
+            $likes = array();
+            foreach (array_keys($pairs) as $from) {
+                $likes[] = $wpdb->prepare('%i LIKE %s', $col, '%' . $wpdb->esc_like((string) $from) . '%');
+            }
+            $sql = $wpdb->prepare('SELECT CHAR_LENGTH(%i) AS len, SUBSTRING(%i, 1, 16) AS head, ', $col, $col)
+                . $wpdb->prepare('SUBSTRING(%i, CHAR_LENGTH(%i), 1) AS tail, (', $col, $col) . implode(' OR ', $likes) . ') AS hit'
+                . $wpdb->prepare(' FROM %i', $table) . $byKey;
+            $info = $wpdb->get_row($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+            DbUtil::releaseMemory();
+            if (!is_array($info) || empty($info['hit']) || $info['len'] === null) {
+                continue;
+            }
+
+            $length     = (int) $info['len'];
+            $serialized = (bool) preg_match('/^(?:[aOC]:\d+:|s:\d+:")/', (string) $info['head']) && in_array((string) $info['tail'], array(';', '}'), true);
+
+            if ($length > self::LARGE_VALUE_CHARS && !$serialized) {
+                foreach ($pairs as $from => $to) {
+                    $result = $wpdb->query($wpdb->prepare('UPDATE %i SET %i = REPLACE(%i, %s, %s)', $table, $col, $col, (string) $from, (string) $to) . $byKey); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+                    DbUtil::releaseMemory();
+                    if ($result === false) {
+                        return false;
+                    }
+                }
+                $changed = true;
+                continue;
+            }
+
+            if ($serialized && $length > self::LARGE_VALUE_CHARS && $wpdb->dbh instanceof \mysqli) {
+                // Serialized: lengths must be recounted, so it is parsed in PHP, but streamed
+                // through temporary files so only one copy of the value is in memory.
+                $result = $this->replaceSerializedStreaming($table, $col, $pk, $key, $byKey, $length, $pairs);
+                if ($result === false) {
+                    return false;
+                }
+                if ($result) {
+                    $changed = true;
+                }
+                continue;
+            }
+
+            // Loaded in pieces, so the database driver never holds a second full copy.
+            $value = $this->fetchInPieces($table, $col, $byKey, $length);
+            if ($value === null) {
+                continue;
+            }
+            $updated = $this->replaceString($value, $pairs);
+            if ($updated === $value) {
+                continue;
+            }
+            unset($value);
+            $result = $this->writeLargeValue($table, $col, $pk, $key, $updated);
+            unset($updated);
+            DbUtil::releaseMemory();
+            if (!$result) {
+                return false;
+            }
+            $changed = true;
+        }
+        return $changed;
+    }
+
+    /** Characters read per query when a large value is loaded in pieces. */
+    private const PIECE_CHARS = 524288;
+
+    /**
+     * File the top-level serialized rewrite flushes its output to (streaming mode), or null.
+     *
+     * @var resource|null
+     */
+    private $sink = null;
+
+    /**
+     * Rewrites one large serialized value on MySQL with about one copy of it in memory:
+     * read in pieces into a temporary file, loaded once at its exact size, parsed with the
+     * output flushed to a second file every megabyte, then streamed back to the server.
+     *
+     * @param array{column: string, numeric: bool} $pk
+     * @param int|string                           $key
+     * @param array<string, string>                $pairs
+     * @return bool|null True when changed, null when left unchanged, false on a database error.
+     */
+    private function replaceSerializedStreaming(string $table, string $col, array $pk, $key, string $byKey, int $length, array $pairs) {
+        global $wpdb;
+
+        $inPath  = Storage::tempFile('replace-in', 'tmp');
+        $outPath = Storage::tempFile('replace-out', 'tmp');
+        $sink    = null;
+        try {
+            $in = fopen($inPath, 'wb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+            if (!$in) {
+                return false;
+            }
+            for ($offset = 1; $offset <= $length; $offset += self::PIECE_CHARS) {
+                $piece = $wpdb->get_var($wpdb->prepare('SELECT SUBSTRING(%i, %d, %d) FROM %i', $col, $offset, self::PIECE_CHARS, $table) . $byKey); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+                DbUtil::releaseMemory();
+                if (!is_string($piece)) {
+                    fclose($in); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                    return false;
+                }
+                fwrite($in, $piece); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+                unset($piece);
+            }
+            fclose($in); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+
+            $value = (string) file_get_contents($inPath); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+            wp_delete_file($inPath);
+
+            $found = false;
+            foreach (array_keys($pairs) as $from) {
+                if (strpos($value, (string) $from) !== false) {
+                    $found = true;
+                    break;
+                }
+            }
+            if (!$found || !is_serialized($value)) {
+                return null;
+            }
+
+            $sink = fopen($outPath, 'w+b'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+            if (!$sink) {
+                return false;
+            }
+            $this->sink = $sink;
+            $pos        = 0;
+            $out        = '';
+            $ok         = $this->walk($value, $pos, strlen($value), $pairs, $out, 0) && trim(substr($value, $pos)) === '';
+            $this->sink = null;
+            if (!$ok) {
+                $this->skippedSerialized++;
+                return null;
+            }
+            fwrite($sink, $out . substr($value, $pos)); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+            unset($value, $out);
+
+            $stmt = $wpdb->dbh->prepare('UPDATE ' . DbUtil::ident($table) . ' SET ' . DbUtil::ident($col) . ' = ? WHERE ' . DbUtil::ident($pk['column']) . ' = ?');
+            if (!($stmt instanceof \mysqli_stmt)) {
+                return false;
+            }
+            $blob = null;
+            $id   = $key;
+            $stmt->bind_param($pk['numeric'] ? 'bi' : 'bs', $blob, $id);
+            rewind($sink);
+            while (!feof($sink)) {
+                $chunk = (string) fread($sink, MB_IN_BYTES); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
+                if ($chunk !== '') {
+                    $stmt->send_long_data(0, $chunk);
+                }
+            }
+            $ok = $stmt->execute();
+            $stmt->close();
+            return $ok ? true : false;
+        } finally {
+            $this->sink = null;
+            if (is_resource($sink)) {
+                fclose($sink); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            }
+            wp_delete_file($inPath);
+            wp_delete_file($outPath);
+        }
+    }
+
+    /**
+     * Reads a large value in pieces, so the database driver never holds a second full copy.
+     */
+    private function fetchInPieces(string $table, string $col, string $byKey, int $chars): ?string {
+        global $wpdb;
+
+        $value = '';
+        for ($offset = 1; $offset <= max(1, $chars); $offset += self::PIECE_CHARS) {
+            $piece = $wpdb->get_var($wpdb->prepare('SELECT SUBSTRING(%i, %d, %d) FROM %i', $col, $offset, self::PIECE_CHARS, $table) . $byKey); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Assembled from prepared fragments above.
+            DbUtil::releaseMemory();
+            if (!is_string($piece)) {
+                return null;
+            }
+            $value .= $piece;
+            unset($piece);
+        }
+        return $value;
+    }
+
+    /**
+     * Saves a large value. On MySQL it is streamed to the server in 1 MB pieces through a
+     * prepared statement, so no escaped copy of the whole value is built in PHP.
+     *
+     * @param array{column: string, numeric: bool} $pk
+     * @param int|string                           $key
+     */
+    private function writeLargeValue(string $table, string $col, array $pk, $key, string $value): bool {
+        global $wpdb;
+
+        if ($wpdb->dbh instanceof \mysqli && $value !== '') {
+            $stmt = $wpdb->dbh->prepare('UPDATE ' . DbUtil::ident($table) . ' SET ' . DbUtil::ident($col) . ' = ? WHERE ' . DbUtil::ident($pk['column']) . ' = ?');
+            if ($stmt instanceof \mysqli_stmt) {
+                $blob = null;
+                $id   = $key;
+                $stmt->bind_param($pk['numeric'] ? 'bi' : 'bs', $blob, $id);
+                $length = strlen($value);
+                for ($offset = 0; $offset < $length; $offset += MB_IN_BYTES) {
+                    $stmt->send_long_data(0, substr($value, $offset, MB_IN_BYTES));
+                }
+                $ok = $stmt->execute();
+                $stmt->close();
+                return $ok;
+            }
+        }
+        return $wpdb->update($table, array($col => $value), array($pk['column'] => $key)) !== false;
+    }
+
+    /**
      * Updates the network domain in the multisite tables (exact host match only).
      */
-    public function replaceMultisiteNetworkDomain(string $oldDomain, string $newDomain): void {
+    public function replaceMultisiteNetworkDomain(string $oldDomain, string $newDomain, ?string $tablePrefix = null): void {
         global $wpdb;
 
         $old = (string) preg_replace('#^https?://#i', '', untrailingslashit(trim($oldDomain)));
@@ -244,7 +561,7 @@ class RecursiveSearchReplace {
             return;
         }
 
-        $base   = (string) $wpdb->base_prefix;
+        $base   = $tablePrefix ?? (string) $wpdb->base_prefix;
         $tables = DbUtil::tables($base);
 
         if (in_array($base . 'site', $tables, true)) {
@@ -357,6 +674,11 @@ class RecursiveSearchReplace {
         if ($depth > self::MAX_DEPTH || $p >= $len) {
             return false;
         }
+        // Streaming mode: hand finished output to the file instead of growing a second copy.
+        if ($this->sink !== null && strlen($out) >= MB_IN_BYTES) {
+            fwrite($this->sink, $out); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+            $out = '';
+        }
 
         switch ($s[$p]) {
             case 'N':
@@ -392,8 +714,12 @@ class RecursiveSearchReplace {
                 if ($start + $length + 2 > $len || substr($s, $start + $length, 2) !== '";') {
                     return false;
                 }
-                $content = $this->replaceString(substr($s, $start, $length), $pairs);
-                $out    .= 's:' . strlen($content) . ':"' . $content . '";';
+                // Nested serialized data inside this string is rewritten in memory, not to the file.
+                $sink       = $this->sink;
+                $this->sink = null;
+                $content    = $this->replaceString(substr($s, $start, $length), $pairs);
+                $this->sink = $sink;
+                $out       .= 's:' . strlen($content) . ':"' . $content . '";';
                 $p       = $start + $length + 2;
                 return true;
 

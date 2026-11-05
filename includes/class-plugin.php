@@ -41,6 +41,12 @@ final class Plugin {
         RestController::init();
         Scheduler::init();
 
+        try {
+            MigratorEngine::watchRestore();
+        } catch (\Throwable $e) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+            // Never let the restore watcher break a page load.
+        }
+
         if (defined('WP_CLI') && WP_CLI && class_exists(CliCommand::class)) {
             \WP_CLI::add_command('slice-backup', CliCommand::class);
         }
@@ -62,7 +68,16 @@ final class Plugin {
      * Deactivation: stop scheduled events. Bundles and settings are kept.
      */
     public static function deactivate(): void {
+        $job = Job::active();
+        if ($job !== null && $job->type === 'restore') {
+            // A restore is replacing this site: ask it to stop safely instead of pulling the
+            // guard away mid-restore. While the guard is active, plugin activation changes are
+            // not saved, so Slice Backup stays active until the restore has ended.
+            $job->requestCancel();
+            return;
+        }
         Storage::releaseLock();
+        RestoreGuard::remove();
         wp_clear_scheduled_hook(Scheduler::HOOK);
         wp_unschedule_hook(MigratorEngine::TICK_HOOK);
     }
