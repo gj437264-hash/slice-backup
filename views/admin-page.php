@@ -447,7 +447,7 @@ $slice_backup_problems = array_filter(
                     <div class="slicebk-card slicebk-card--danger">
                         <h2 class="slicebk-card__title"><span class="slicebk-step">4</span><?php esc_html_e('Restore', 'slice-backup'); ?></h2>
                         <ul class="slicebk-list">
-                            <li><?php esc_html_e('The selected parts of this site are overwritten. This cannot be undone, so create a backup of this site first if you may need it.', 'slice-backup'); ?></li>
+                            <li><?php esc_html_e('The database and plugin/theme folders can be undone afterwards with "Undo this restore". Uploads, WordPress core, languages and loose root files are copied in place and cannot be undone, so back up this site first if you may need them.', 'slice-backup'); ?></li>
                             <li><?php esc_html_e('Restoring the database replaces all users. Afterwards, log in with an account from the bundle.', 'slice-backup'); ?></li>
                         </ul>
                         <label class="slicebk-check">
@@ -459,6 +459,29 @@ $slice_backup_problems = array_filter(
                         </button>
                     </div>
                 </form>
+
+                <div id="slicebk-rollback-banner" class="slicebk-card slicebk-callout slicebk-callout--info" <?php echo empty($view['rollback']) ? 'hidden' : ''; ?>>
+                    <span class="dashicons dashicons-backup" aria-hidden="true"></span>
+                    <div class="slicebk-rollback-body">
+                        <p id="slicebk-rollback-text">
+                            <?php if (!empty($view['rollback'])) : ?>
+                                <?php
+                                printf(
+                                    /* translators: 1: date, 2: number of tables, 3: number of folders. */
+                                    esc_html__('A safety copy from the restore on %1$s is available (%2$d database tables, %3$d plugin/theme folders).', 'slice-backup'),
+                                    esc_html($view['rollback']['when']),
+                                    (int) $view['rollback']['tables'],
+                                    (int) $view['rollback']['folders']
+                                );
+                                ?>
+                            <?php endif; ?>
+                        </p>
+                        <div class="slicebk-inline">
+                            <button type="button" class="button button-primary" id="slicebk-rollback-undo"><?php esc_html_e('Undo this restore', 'slice-backup'); ?></button>
+                            <button type="button" class="button" id="slicebk-rollback-discard"><?php esc_html_e('Delete safety copy', 'slice-backup'); ?></button>
+                        </div>
+                    </div>
+                </div>
 
                 <div id="slicebk-restore-result" hidden tabindex="-1"></div>
 

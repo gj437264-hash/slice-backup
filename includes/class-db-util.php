@@ -22,6 +22,17 @@ if (!defined('ABSPATH')) {
  */
 final class DbUtil {
     /**
+     * Whether a table exists and actually holds data the normal way (a real table, not
+     * just a name SHOW TABLES happens to list). Used to confirm a RENAME TABLE really
+     * took effect, since some non-MySQL compatibility layers accept the statement
+     * without error and silently do nothing.
+     */
+    public static function tableExists(string $table): bool {
+        global $wpdb;
+        return $wpdb->get_var($wpdb->prepare('SELECT COUNT(*) FROM %i', $table)) !== null && $wpdb->last_error === '';
+    }
+
+    /**
      * Lists base tables (not views) that start with the given prefix.
      *
      * @param string|null $prefix Table prefix. Defaults to $wpdb->base_prefix.

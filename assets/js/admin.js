@@ -431,8 +431,14 @@
 				(job.warnings || []).forEach(function (w) { toast(w, 'info'); });
 			} else if (job.status === 'cancelled') {
 				toast(__('Cancelled.', D), 'info');
+				if (job.type === 'restore') {
+					showRestoreOutcome(job);
+				}
 			} else {
 				toast(job.error || __('The job failed.', D), 'error');
+				if (job.type === 'restore') {
+					showRestoreOutcome(job);
+				}
 			}
 			if (handlers.onEnd) {
 				handlers.onEnd(job);
@@ -1399,10 +1405,104 @@
 		$('#slicebk-restore-form').hidden = true;
 		var target = $('#slicebk-restore-result');
 		target.textContent = '';
-		target.appendChild(renderReport(res, true));
+		target.appendChild(renderReport(res, true, job));
 		target.hidden = false;
 		target.focus();
 		toast(__('Restore finished.', D));
+		refreshRollbackBanner();
+	}
+
+	function showRestoreOutcome(job) {
+		if (!job.actions || !job.actions.length) {
+			refreshRollbackBanner();
+			return;
+		}
+		activateTab('import');
+		$('#slicebk-restore-form').hidden = true;
+		var target = $('#slicebk-restore-result');
+		target.textContent = '';
+		var wrap = el('div', { className: 'slicebk-card slicebk-report' });
+		wrap.appendChild(el('div', { className: 'slicebk-report__head' }, [
+			el('span', { className: 'slicebk-result__icon dashicons dashicons-warning is-warn', 'aria-hidden': 'true' }),
+			el('div', {}, [
+				el('h2', { className: 'slicebk-card__title', text: job.status === 'cancelled' ? __('Restore cancelled', D) : __('Restore failed', D) }),
+				el('p', { className: 'slicebk-muted', text: job.error || '' })
+			])
+		]));
+		appendActionsAndLog(wrap, job.actions, job.logUrl);
+		target.appendChild(wrap);
+		target.hidden = false;
+		target.focus();
+		refreshRollbackBanner();
+	}
+
+	function refreshRollbackBanner() {
+		request('slice_backup_rollback_info').then(function (data) {
+			setRollbackBanner(data.rollback);
+		}).catch(function () { /* leave the banner as it was */ });
+	}
+
+	function setRollbackBanner(rollback) {
+		var banner = $('#slicebk-rollback-banner');
+		if (!banner) {
+			return;
+		}
+		if (!rollback) {
+			banner.hidden = true;
+			return;
+		}
+		$('#slicebk-rollback-text').textContent = sprintf(
+			__('A safety copy from the restore on %1$s is available (%2$d database tables, %3$d plugin/theme folders).', D),
+			rollback.when, rollback.tables, rollback.folders
+		);
+		banner.hidden = false;
+	}
+
+	var rollbackUndoBtn = $('#slicebk-rollback-undo');
+	if (rollbackUndoBtn) {
+		rollbackUndoBtn.addEventListener('click', function () {
+			confirmDialog({
+				title: __('Undo this restore?', D),
+				message: __('The database, plugins and themes are put back exactly as they were before the restore. This cannot be undone a second time.', D),
+				confirmLabel: __('Undo restore', D),
+				danger: true
+			}).then(function (ok) {
+				if (!ok) {
+					return;
+				}
+				rollbackUndoBtn.classList.add('is-busy');
+				request('slice_backup_rollback_undo').then(function (data) {
+					toast(data.message);
+					setRollbackBanner(null);
+				}).catch(function (error) {
+					toast(error.message, 'error');
+				}).then(function () {
+					rollbackUndoBtn.classList.remove('is-busy');
+				});
+			});
+		});
+	}
+
+	var rollbackDiscardBtn = $('#slicebk-rollback-discard');
+	if (rollbackDiscardBtn) {
+		rollbackDiscardBtn.addEventListener('click', function () {
+			confirmDialog({
+				title: __('Delete the safety copy?', D),
+				message: __('You will no longer be able to undo the last restore.', D),
+				confirmLabel: __('Delete safety copy', D),
+				danger: true
+			}).then(function (ok) {
+				if (!ok) {
+					return;
+				}
+				request('slice_backup_rollback_discard').then(function (data) {
+					toast(data.message);
+					setRollbackBanner(null);
+				}).catch(function (error) {
+					toast(error.message, 'error');
+				});
+			});
+		});
 	}
 
 	function statusBadge(status) {
@@ -1411,7 +1511,7 @@
 		return el('span', { className: 'slicebk-badge slicebk-badge--' + (map[status] || 'info'), text: labels[status] || status });
 	}
 
-	function renderReport(res, fresh) {
+	function renderReport(res, fresh, job) {
 		var wrap = el('div', { className: 'slicebk-card slicebk-report' });
 		var summary = res.summary || {};
 		var db = summary.database;
@@ -1505,7 +1605,35 @@
 			]));
 		}
 
+		appendActionsAndLog(wrap, res.actions || (job && job.actions), res.logUrl || (job && job.logUrl));
+
 		return wrap;
+	}
+
+	function appendActionsAndLog(wrap, actions, logUrl) {
+		actions = actions || [];
+		var levelIcon = { action: 'dashicons-admin-tools', warning: 'dashicons-warning', error: 'dashicons-dismiss', info: 'dashicons-info-outline' };
+		var levelLabel = { action: __('Action taken', D), warning: __('Warning', D), error: __('Error', D), info: __('Note', D) };
+		if (actions.length) {
+			wrap.appendChild(el('h3', { className: 'slicebk-subtitle' }, [icon('dashicons-list-view'), __('What happened', D)]));
+			var list = el('ul', { className: 'slicebk-action-log' });
+			actions.forEach(function (a) {
+				list.appendChild(el('li', { className: 'is-' + a.level }, [
+					el('span', { className: 'dashicons ' + (levelIcon[a.level] || 'dashicons-info-outline'), 'aria-hidden': 'true' }),
+					el('div', {}, [
+						el('p', {}, [el('strong', { text: levelLabel[a.level] ? levelLabel[a.level] + ': ' : '' }), a.message]),
+						a.followUp ? el('p', { className: 'slicebk-muted slicebk-small', text: a.followUp }) : null
+					])
+				]));
+			});
+			wrap.appendChild(list);
+		}
+
+		if (logUrl) {
+			wrap.appendChild(el('p', {}, [
+				el('a', { className: 'button', href: logUrl, text: __('Download the full report', D) })
+			]));
+		}
 	}
 
 	var lastReport = $('#slicebk-last-report');

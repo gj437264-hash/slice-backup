@@ -362,6 +362,66 @@ final class CliCommand {
     }
 
     /**
+     * Shows, undoes, or discards the safety copy kept from the last restore.
+     *
+     * ## OPTIONS
+     *
+     * [<action>]
+     * : What to do.
+     * ---
+     * default: status
+     * options:
+     *   - status
+     *   - undo
+     *   - discard
+     * ---
+     *
+     * [--yes]
+     * : Skip the confirmation prompt for undo/discard.
+     *
+     * ## EXAMPLES
+     *
+     *     wp slice-backup rollback
+     *     wp slice-backup rollback undo
+     *     wp slice-backup rollback discard --yes
+     *
+     * @param string[]             $args
+     * @param array<string, mixed> $assocArgs
+     */
+    public function rollback(array $args, array $assocArgs): void {
+        $action = (string) ($args[0] ?? 'status');
+        $info   = RestoreRollback::info();
+
+        if ($action === 'status') {
+            if ($info === null) {
+                \WP_CLI::success('No safety copy is available.');
+                return;
+            }
+            \WP_CLI::log(sprintf('Safety copy from %s: %d database tables, %d plugin/theme folders. Bundle: %s', $info['when'], $info['tables'], $info['folders'], $info['bundle']));
+            return;
+        }
+
+        if ($info === null) {
+            \WP_CLI::error('No safety copy is available.');
+        }
+
+        if ($action === 'undo') {
+            \WP_CLI::confirm('Put the database, plugins and themes back as they were before the last restore?', $assocArgs);
+            try {
+                $result = RestoreRollback::undo();
+            } catch (\Throwable $e) {
+                \WP_CLI::error(Plugin::errorText($e));
+            }
+            \WP_CLI::success(sprintf('Restore undone: %d tables, %d folders.', $result['tables'], $result['folders']));
+            return;
+        }
+
+        \WP_CLI::confirm('Delete the safety copy? You will no longer be able to undo the last restore.', $assocArgs);
+        $result = RestoreRollback::discard();
+        \WP_CLI::success(sprintf('Safety copy deleted: %d tables, %d folders.', $result['tables'], $result['folders']));
+    }
+
+    /**
      * Prints job progress (used as a callback).
      *
      * @internal

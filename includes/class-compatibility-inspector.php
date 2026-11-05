@@ -36,6 +36,38 @@ class CompatibilityInspector {
     private $deadline = 0.0;
 
     /**
+     * Default WordPress themes, newest first. Used as a last-resort fallback: the newest
+     * one already installed is activated, or (if none is installed) the newest one is
+     * downloaded fresh from WordPress.org.
+     */
+    private const DEFAULT_THEMES = array(
+        'twentytwentyfive', 'twentytwentyfour', 'twentytwentythree', 'twentytwentytwo',
+        'twentytwentyone', 'twentytwenty', 'twentynineteen', 'twentyseventeen',
+        'twentysixteen', 'twentyfifteen', 'twentyfourteen', 'twentythirteen',
+        'twentytwelve', 'twentyeleven', 'twentyten',
+    );
+
+    /**
+     * Receives (level, message, context, followUp) for every action this class takes.
+     *
+     * @var callable|null
+     */
+    private $logger = null;
+
+    public function setLogger(?callable $logger): void {
+        $this->logger = $logger;
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function log(string $level, string $message, array $context = array(), string $followUp = ''): void {
+        if ($this->logger !== null) {
+            ($this->logger)($level, $message, $context, $followUp);
+        }
+    }
+
+    /**
      * Extracts every entry, skipping (and reporting) unreadable ones instead of aborting.
      * Aborts before writing anything if any entry tries to escape the target folder.
      *
@@ -324,9 +356,27 @@ class CompatibilityInspector {
             $active   = array((string) get_option('stylesheet'), (string) get_option('template'));
             $affected = array_intersect($active, array_keys($themes));
 
-            $fallback = empty($affected) ? null : $this->fallbackTheme(array_keys($themes));
-            if ($fallback !== null) {
-                switch_theme($fallback);
+            $fallback = null;
+            if (!empty($affected)) {
+                $fallback = $this->fallbackTheme(array_keys($themes));
+                if ($fallback === null) {
+                    // Nothing usable is installed: get a default theme so the site still has one.
+                    $fallback = $this->downloadDefaultTheme(array_keys($themes));
+                }
+                if ($fallback !== null) {
+                    switch_theme($fallback);
+                    $this->log(
+                        RestoreLog::ACTION,
+                        sprintf(
+                            /* translators: 1: comma-separated list of theme folder names, 2: theme now active. */
+                            __('The active theme (%1$s) is not compatible with this server, so "%2$s" was activated instead.', 'slice-backup'),
+                            implode(', ', $affected),
+                            $fallback
+                        ),
+                        array(),
+                        __('Update the original theme to a version that supports this server, then switch back to it from Appearance > Themes.', 'slice-backup')
+                    );
+                }
             }
 
             foreach ($themes as $slug => $index) {
@@ -339,7 +389,13 @@ class CompatibilityInspector {
                         $fallback
                     );
                 } else {
-                    $report['items'][$index]['actionTaken'] = __('Active theme, but no compatible fallback theme is installed. Install a default theme and activate it.', 'slice-backup');
+                    $report['items'][$index]['actionTaken'] = __('Active theme, but no fallback theme could be installed. Install a default theme and activate it.', 'slice-backup');
+                    $this->log(
+                        RestoreLog::ERROR,
+                        __('The active theme is not compatible with this server, and no fallback theme could be installed.', 'slice-backup'),
+                        array('slug' => $slug),
+                        __('Install and activate any theme from Appearance > Themes, or check that this server can reach WordPress.org.', 'slice-backup')
+                    );
                 }
             }
         }
@@ -425,9 +481,34 @@ class CompatibilityInspector {
         if ($fallback === null) {
             $fallback = $this->fallbackTheme($exclude);
         }
+        if ($fallback === null) {
+            $fallback = $this->downloadDefaultTheme($exclude);
+        }
         if ($fallback !== null) {
             switch_theme($fallback);
+            $this->log(
+                RestoreLog::ACTION,
+                sprintf(
+                    /* translators: 1: comma-separated list of theme folder names, 2: theme now active. */
+                    __('The active theme (%1$s) was not usable on this server, so "%2$s" was activated instead.', 'slice-backup'),
+                    implode(', ', $affected),
+                    $fallback
+                ),
+                array(),
+                __('Restore or update the original theme, then switch back to it from Appearance > Themes.', 'slice-backup')
+            );
             $off = array_merge($off, $affected);
+        } else {
+            $this->log(
+                RestoreLog::ERROR,
+                sprintf(
+                    /* translators: %s: comma-separated list of theme folder names. */
+                    __('The active theme (%s) is not usable on this server, and no fallback theme could be activated. The site has no active theme.', 'slice-backup'),
+                    implode(', ', $affected)
+                ),
+                array(),
+                __('Install and activate any theme from Appearance > Themes as soon as possible.', 'slice-backup')
+            );
         }
         return array_values(array_unique($off));
     }
@@ -791,7 +872,20 @@ class CompatibilityInspector {
         }
 
         wp_cache_flush();
-        return array_values(array_unique($deactivated));
+        $deactivated = array_values(array_unique($deactivated));
+        foreach ($deactivated as $slug) {
+            $this->log(
+                RestoreLog::ACTION,
+                sprintf(
+                    /* translators: %s: plugin folder name. */
+                    __('Plugin "%s" was deactivated because it is not compatible with this server.', 'slice-backup'),
+                    $slug
+                ),
+                array('slug' => $slug),
+                __('Update this plugin, or confirm it works on this server, then reactivate it from the Plugins screen.', 'slice-backup')
+            );
+        }
+        return $deactivated;
     }
 
     /**
@@ -827,6 +921,72 @@ class CompatibilityInspector {
             }
             return $candidate;
         }
+        return null;
+    }
+
+    /**
+     * Downloads the newest default WordPress theme from WordPress.org and installs it,
+     * for when no usable theme is already on this server. Tries each default theme,
+     * newest first, until one downloads and extracts successfully.
+     *
+     * @param string[] $exclude Theme slugs not to use even if one of these downloads fine.
+     * @return string|null The installed theme's slug, or null if every attempt failed
+     *                      (no outbound internet, or WordPress.org unreachable).
+     */
+    public function downloadDefaultTheme(array $exclude = array()): ?string {
+        if (!function_exists('download_url') || !function_exists('unzip_file')) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+        }
+        if (!function_exists('download_url') || !function_exists('unzip_file')) {
+            return null;
+        }
+
+        $root = get_theme_root();
+        foreach (self::DEFAULT_THEMES as $slug) {
+            if (in_array($slug, $exclude, true)) {
+                continue;
+            }
+            $url = 'https://downloads.wordpress.org/theme/' . $slug . '.latest-stable.zip';
+            $tmp = download_url($url, 60);
+            if (is_wp_error($tmp)) {
+                $this->log(RestoreLog::INFO, sprintf('Could not download the default theme "%s" (%s); trying an older one.', $slug, $tmp->get_error_message()));
+                continue;
+            }
+
+            $dest = wp_normalize_path(untrailingslashit($root));
+            wp_mkdir_p($dest);
+            $result = unzip_file((string) $tmp, $dest);
+            wp_delete_file((string) $tmp);
+            if (is_wp_error($result)) {
+                $this->log(RestoreLog::INFO, sprintf('Could not install the default theme "%s" (%s); trying an older one.', $slug, $result->get_error_message()));
+                Storage::removeDirectory($dest . '/' . $slug);
+                continue;
+            }
+            if (!is_file($dest . '/' . $slug . '/style.css')) {
+                // The zip didn't contain what we expected; try the next one.
+                Storage::removeDirectory($dest . '/' . $slug);
+                continue;
+            }
+
+            wp_clean_themes_cache();
+            $this->log(
+                RestoreLog::ACTION,
+                sprintf(
+                    /* translators: %s: theme folder name. */
+                    __('No usable theme was installed, so the default WordPress theme "%s" was downloaded from WordPress.org and installed.', 'slice-backup'),
+                    $slug
+                ),
+                array('slug' => $slug)
+            );
+            return $slug;
+        }
+
+        $this->log(
+            RestoreLog::WARNING,
+            __('No usable theme could be found or downloaded for this site.', 'slice-backup'),
+            array(),
+            __('Install and activate any theme from the Themes screen, or check that this server can reach WordPress.org.', 'slice-backup')
+        );
         return null;
     }
 }

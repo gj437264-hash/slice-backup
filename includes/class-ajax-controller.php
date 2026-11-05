@@ -43,6 +43,10 @@ final class AjaxController {
         'slice_backup_peer_check'    => 'peerCheck',
         'slice_backup_dropbox_start' => 'dropboxStart',
         'slice_backup_dropbox_finish' => 'dropboxFinish',
+        'slice_backup_rollback_info'    => 'rollbackInfo',
+        'slice_backup_rollback_undo'    => 'rollbackUndo',
+        'slice_backup_rollback_discard' => 'rollbackDiscard',
+        'slice_backup_log_download'     => 'logDownload',
     );
 
     public static function init(): void {
@@ -577,6 +581,75 @@ final class AjaxController {
         self::guard();
         $report = get_site_option(Plugin::OPTION_REPORT);
         wp_send_json_success(array('report' => is_array($report) ? $report : null));
+    }
+
+    /**
+     * Whether a safety copy from the last restore is available, and what it covers.
+     */
+    public static function rollbackInfo(): void {
+        self::guard();
+        wp_send_json_success(array('rollback' => RestoreRollback::info()));
+    }
+
+    /**
+     * Puts the site back as it was before the last restore.
+     */
+    public static function rollbackUndo(): void {
+        self::guard();
+        try {
+            $result = RestoreRollback::undo();
+            wp_send_json_success(array(
+                'message' => sprintf(
+                    /* translators: 1: number of tables, 2: number of folders. */
+                    __('Restore undone: %1$d database tables and %2$d plugin/theme folders were put back.', 'slice-backup'),
+                    $result['tables'],
+                    $result['folders']
+                ),
+            ));
+        } catch (\Throwable $e) {
+            self::fail($e);
+        }
+    }
+
+    /**
+     * Deletes the safety copy of the last restore to free up space.
+     */
+    public static function rollbackDiscard(): void {
+        self::guard();
+        try {
+            $result = RestoreRollback::discard();
+            wp_send_json_success(array(
+                'message' => sprintf(
+                    /* translators: 1: number of tables, 2: number of folders. */
+                    __('Safety copy deleted: %1$d database tables and %2$d plugin/theme folders were removed.', 'slice-backup'),
+                    $result['tables'],
+                    $result['folders']
+                ),
+            ));
+        } catch (\Throwable $e) {
+            self::fail($e);
+        }
+    }
+
+    /**
+     * Streams a saved restore/backup log. Uses its own nonce because the link is opened
+     * directly by the browser.
+     */
+    public static function logDownload(): void {
+        if (!Plugin::currentUserCan()) {
+            wp_die(esc_html__('You do not have permission to download reports.', 'slice-backup'), '', array('response' => 403));
+        }
+        $nonce = isset($_GET['nonce']) ? sanitize_text_field(wp_unslash($_GET['nonce'])) : '';
+        if (!wp_verify_nonce($nonce, 'slice_backup_log_download')) {
+            wp_die(esc_html__('This download link has expired. Reload the page and try again.', 'slice-backup'), '', array('response' => 403));
+        }
+        $name = isset($_GET['file']) && is_scalar($_GET['file']) ? sanitize_file_name(wp_unslash((string) $_GET['file'])) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        try {
+            $path = RestoreLog::path($name);
+        } catch (\Throwable $e) {
+            wp_die(esc_html(Plugin::errorText($e)), '', array('response' => 404));
+        }
+        Storage::streamFile($path, 'text/plain; charset=utf-8');
     }
 
     public static function probe(): void {

@@ -141,6 +141,23 @@ final class RestoreLog {
     }
 
     /**
+     * Nonce-protected admin-ajax download URL for a saved report.
+     */
+    public static function downloadUrl(string $name): string {
+        if ($name === '') {
+            return '';
+        }
+        return add_query_arg(
+            array(
+                'action' => 'slice_backup_log_download',
+                'file'   => rawurlencode($name),
+                'nonce'  => wp_create_nonce('slice_backup_log_download'),
+            ),
+            admin_url('admin-ajax.php')
+        );
+    }
+
+    /**
      * Full path of a saved report.
      *
      * @throws \InvalidArgumentException For invalid or missing names.

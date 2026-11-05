@@ -542,7 +542,7 @@ final class Storage {
      * Streams a file to the browser in 2 MB chunks with HTTP Range (resume) support.
      * Ends the request.
      */
-    public static function streamFile(string $filePath): void {
+    public static function streamFile(string $filePath, string $contentType = 'application/zip'): void {
         if (!is_file($filePath) || !is_readable($filePath)) {
             wp_die(esc_html__('The requested bundle does not exist or cannot be read.', 'slice-backup'), '', array('response' => 404));
         }
@@ -597,7 +597,7 @@ final class Storage {
 
         nocache_headers();
         header('X-Accel-Buffering: no');
-        header('Content-Type: application/zip');
+        header('Content-Type: ' . $contentType);
         header('Content-Disposition: attachment; filename="' . basename($filePath) . '"');
         header('Accept-Ranges: bytes');
         header('X-Content-Type-Options: nosniff');

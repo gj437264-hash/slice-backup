@@ -1146,6 +1146,22 @@ class MigratorEngine {
             }
         }
         $job->data['summary']['files']['mu_plugins'] = array('copied' => $copied, 'failed' => $failed);
+        if (!empty($skip)) {
+            RestoreLog::add(
+                $job,
+                RestoreLog::WARNING,
+                sprintf(
+                    /* translators: %d: number of must-use plugins. */
+                    __('%d must-use plugin(s) were left out because they would crash on this server.', 'slice-backup'),
+                    count($skip)
+                ),
+                array('files' => array_keys($skip)),
+                __('Update them to a version that supports this PHP version, then copy them into wp-content/mu-plugins by hand.', 'slice-backup')
+            );
+        }
+        if ($copied > 0 || $failed > 0) {
+            RestoreLog::add($job, RestoreLog::INFO, sprintf('Must-use plugin files restored: %d copied, %d failed.', $copied, $failed));
+        }
     }
 
     /**
@@ -1459,9 +1475,11 @@ class MigratorEngine {
                 return self::swapStep($job, $state, $deadline);
 
             case 'shield':
-                $report = (array) $job->data['report'];
+                $report    = (array) $job->data['report'];
+                $inspector = new CompatibilityInspector();
+                $inspector->setLogger(self::logger($job));
                 RestoreGuard::disableInThisRequest();
-                (new CompatibilityInspector())->applyShield($report, !empty($job->options['isolate']));
+                $inspector->applyShield($report, !empty($job->options['isolate']));
                 $job->data['report'] = $report;
                 self::setProgress($job, __('Protecting the site from incompatible code', 'slice-backup'), 1.0);
                 return true;
@@ -2097,6 +2115,23 @@ class MigratorEngine {
             if ($stillStaged) {
                 try {
                     RestoreRollback::renameTables((array) $state['pairs']);
+                    // A database layer can accept RENAME TABLE without error and not actually
+                    // rename anything (seen on some non-MySQL compatibility shims). Never trust
+                    // the swap blindly: confirm no staging tables remain and the live ones exist.
+                    $stillThere = DbUtil::tables((string) $job->data['stagePrefix']);
+                    $missing    = array();
+                    foreach ((array) $state['tables'] as $t) {
+                        if (!DbUtil::tableExists((string) $t['live'])) {
+                            $missing[] = (string) $t['live'];
+                        }
+                    }
+                    if (!empty($stillThere) || !empty($missing)) {
+                        throw new \RuntimeException(esc_html(sprintf(
+                            /* translators: %s: comma-separated list of table names. */
+                            __('The database tables could not be switched over on this server (RENAME TABLE had no effect). Nothing was changed. Tables involved: %s', 'slice-backup'),
+                            implode(', ', array_slice(array_merge($stillThere, $missing), 0, 10))
+                        )));
+                    }
                 } catch (\Throwable $e) {
                     self::revertFolderSwaps($state['folders'], count($state['folders']));
                     $state['done'] = 0;
@@ -2105,7 +2140,10 @@ class MigratorEngine {
                 }
             }
             if (!empty($state['pairs'])) {
+                // Tables are already live from here on: a crash must never "undo" the folders
+                // that were already swapped in to match them.
                 $job->data['dbRestored'] = true;
+                $job->data['swapped']    = true;
                 wp_cache_flush();
                 $replaced = count(array_filter($state['tables'], static function ($t): bool {
                     return $t['old'] !== null;
@@ -2122,22 +2160,32 @@ class MigratorEngine {
             self::checkpoint($job, 'swap', $state);
         }
 
-        // The safety copy: what to put back on undo.
+        // The safety copy: what to put back on undo. Only meaningful if something with an
+        // "old" counterpart was actually replaced; a restore into an empty site has nothing
+        // to roll back, so no safety copy (and no undo option) is recorded for it.
         $folders = array();
         foreach ((array) $state['folders'] as $folder) {
             $folders[] = array('live' => $folder['live'], 'old' => !empty($folder['hadOld']) ? $folder['old'] : null);
         }
-        RestoreRollback::save(array(
-            'created'    => time(),
-            'job'        => $job->id,
-            'bundle'     => (string) $job->options['filename'],
-            'basePrefix' => (string) $job->data['targetPrefix'],
-            'oldPrefix'  => (string) ($state['oldPrefix'] ?? ''),
-            'tables'     => (array) ($state['tables'] ?? array()),
-            'folders'    => $folders,
-        ));
+        $hadTable  = !empty(array_filter((array) $state['tables'], static function ($t) {
+            return $t['old'] !== null;
+        }));
+        $hadFolder = !empty(array_filter($folders, static function ($f) {
+            return $f['old'] !== null;
+        }));
+        if ($hadTable || $hadFolder) {
+            RestoreRollback::save(array(
+                'created'    => time(),
+                'job'        => $job->id,
+                'bundle'     => (string) $job->options['filename'],
+                'basePrefix' => (string) $job->data['targetPrefix'],
+                'oldPrefix'  => (string) ($state['oldPrefix'] ?? ''),
+                'tables'     => (array) ($state['tables'] ?? array()),
+                'folders'    => $folders,
+            ));
+            RestoreLog::add($job, RestoreLog::INFO, 'Safety copy recorded: "Undo this restore" on the Restore tab (or wp slice-backup rollback) puts the previous database, plugins and themes back.');
+        }
         $job->data['swapped'] = true;
-        RestoreLog::add($job, RestoreLog::INFO, 'Safety copy recorded: "Undo this restore" on the Restore tab (or wp slice-backup rollback) puts the previous database, plugins and themes back.');
         self::setProgress($job, self::stepLabel('swap'), 1.0);
         return true;
     }
@@ -2189,7 +2237,9 @@ class MigratorEngine {
                 if (!empty($job->data['dbRestored'])) {
                     self::keepTargetSettings($job);
                     // The restored database may name a theme that is not on this server.
-                    $missing = (new CompatibilityInspector())->safeBoot(array(), array(), (array) ($job->data['targetTheme'] ?? array()));
+                    $finalInspector = new CompatibilityInspector();
+                    $finalInspector->setLogger(self::logger($job));
+                    $missing = $finalInspector->safeBoot(array(), array(), (array) ($job->data['targetTheme'] ?? array()));
                     if (!empty($missing)) {
                         $job->warnings[] = sprintf(
                             /* translators: %s: theme folder name. */
@@ -2201,6 +2251,10 @@ class MigratorEngine {
                 self::placeMuPlugins($job);
                 RestoreGuard::remove($job);
 
+                $canRollback = RestoreRollback::info() !== null;
+                RestoreLog::add($job, RestoreLog::INFO, 'Restore finished successfully.', array('canRollback' => $canRollback));
+                $logFile = RestoreLog::persist($job);
+
                 $result = array(
                     'success'             => true,
                     'message'             => __('Restore finished.', 'slice-backup'),
@@ -2209,6 +2263,10 @@ class MigratorEngine {
                     'summary'             => $job->data['summary'],
                     'compatibilityReport' => $job->data['report'] ?? array('items' => array(), 'summary' => array()),
                     'reloginRequired'     => !empty($job->data['dbRestored']),
+                    'canRollback'         => $canRollback,
+                    'logFile'             => $logFile,
+                    'logUrl'              => RestoreLog::downloadUrl($logFile),
+                    'actions'             => array_values((array) ($job->data['actions'] ?? array())),
                 );
                 $job->data['result'] = $result;
                 update_site_option(Plugin::OPTION_REPORT, $result);

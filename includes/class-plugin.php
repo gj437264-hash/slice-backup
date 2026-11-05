@@ -562,6 +562,7 @@ final class Plugin {
             'maxUpload'    => size_format(wp_max_upload_size()),
             'checks'       => SystemCheck::run(),
             'hasReport'    => is_array(get_site_option(self::OPTION_REPORT)),
+            'rollback'     => RestoreRollback::info(),
         );
     }
 
