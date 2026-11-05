@@ -9,7 +9,7 @@
 **Requires WordPress:** 6.2+  
 **Tested up to:** 7.1  
 **Requires PHP:** 7.4+  
-**Stable version:** 1.0.0-beta  
+**Stable version:** 1.0.0
 **License:** GPLv2 or later
 
 Back up, move, and restore WordPress sites with a complete, resumable backup and migration solution. Encrypt your backups, schedule automatic jobs, send them to your own cloud storage, or transfer sites directly between servers.
