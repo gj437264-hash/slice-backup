@@ -426,6 +426,24 @@ class MigratorEngine {
         return $job;
     }
 
+    /**
+     * Imports a bundle straight from a publicly-shared link (Google Drive, OneDrive,
+     * SharePoint, Dropbox, or any other direct URL), without downloading it to the user's
+     * own computer first.
+     *
+     * @throws \Throwable On an invalid URL or when another job is running.
+     */
+    public static function startLinkImport(string $url, string $origin = 'manual'): Job {
+        $url = esc_url_raw(trim($url));
+        if ($url === '') {
+            throw new \InvalidArgumentException(esc_html__('Paste a link to the backup file first.', 'slice-backup'));
+        }
+        $job       = Job::create('link_import', array('resolve', 'link_download', 'finalize'), array('url' => $url), $origin);
+        $job->data = array('url' => $url, 'part' => $job->workDir() . '/link.part');
+        $job->save();
+        return $job;
+    }
+
     /* ------------------------------------------------------------------ */
     /* Running jobs                                                        */
     /* ------------------------------------------------------------------ */
@@ -1416,6 +1434,55 @@ class MigratorEngine {
                 $size = max(1.0, (float) ($state['size'] ?? 1));
                 self::setProgress($job, __('Downloading from cloud storage', 'slice-backup'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
                 return $done;
+
+            case 'resolve':
+                $resolved = LinkImporter::resolve((string) $job->data['url']);
+                $probe    = LinkImporter::probe($resolved);
+                $job->data['resolved'] = $resolved;
+                $job->data['name']     = wp_unique_filename(Storage::dir(), $probe['name']);
+                $job->data['remoteSize'] = $probe['size'];
+                $job->data['linkState']  = array(
+                    'size'       => $probe['size'],
+                    'offset'     => 0.0,
+                    'rangeOk'    => $probe['rangeOk'],
+                    'firstBytes' => $probe['firstBytes'],
+                );
+                self::setProgress($job, __('Reading the link', 'slice-backup'), 1.0, size_format($probe['size'], 1));
+                return true;
+
+            case 'link_download':
+                $part = (string) $job->data['part'];
+                if (empty($state)) {
+                    file_put_contents($part, ''); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+                    $state = (array) $job->data['linkState'];
+                } else {
+                    self::rewind($part, $state);
+                    $state['offset'] = min((float) $state['offset'], Storage::filesize($part));
+                }
+                $done = LinkImporter::downloadStep((array) $job->data['resolved'], $part, $state, $deadline);
+                self::remember($part, $state);
+                $job->data['linkState'] = $state;
+                $size = max(1.0, (float) $state['size']);
+                self::setProgress($job, __('Downloading from the link', 'slice-backup'), (float) $state['offset'] / $size, size_format((float) $state['offset'], 1) . ' / ' . size_format($size, 1));
+                if (!$done) {
+                    return false;
+                }
+
+                // Trust nothing from the link: open it as a real bundle before it is kept.
+                if (Crypto::isEncryptedFile($part)) {
+                    if (substr((string) $job->data['name'], -8) !== '.slicebk') {
+                        $job->data['name'] = wp_unique_filename(Storage::dir(), preg_replace('/\.[^.]+$/', '', (string) $job->data['name']) . '.slicebk');
+                    }
+                    return true;
+                }
+                $zip = new \ZipArchive();
+                $opened = $zip->open($part, \ZipArchive::CHECKCONS);
+                if ($opened === true) {
+                    $zip->close();
+                    return true;
+                }
+                wp_delete_file($part);
+                throw new \RuntimeException(esc_html__('The downloaded file is not a valid Slice Backup bundle (it may be damaged, or the link did not point at a bundle). Nothing was imported.', 'slice-backup'));
 
             /* Restore ----------------------------------------------------- */
             case 'decrypt':
