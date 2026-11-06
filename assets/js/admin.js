@@ -640,10 +640,14 @@
 				toast(sprintf(__('The site was restored on %s. Log in there with an account from this site.', D), host), 'info');
 			}
 		}
+		// job.bundleUrl is built fresh for this browser; res.downloadUrl is a snapshot from
+		// whichever request finished the job (which can be an unauthenticated background
+		// tick) and its nonce may not verify for the person viewing this page.
+		var bundleUrl = job.bundleUrl || res.downloadUrl;
 		var download = $('#slicebk-export-download');
-		download.hidden = !res.downloadUrl;
-		if (res.downloadUrl) {
-			download.href = res.downloadUrl;
+		download.hidden = !bundleUrl;
+		if (bundleUrl) {
+			download.href = bundleUrl;
 		}
 		card.hidden = false;
 		activateTab('export');
@@ -1605,7 +1609,9 @@
 			]));
 		}
 
-		appendActionsAndLog(wrap, res.actions || (job && job.actions), res.logUrl || (job && job.logUrl));
+		// job.logUrl (built fresh for this browser) wins over res.logUrl, a snapshot saved
+		// whenever the restore finished, possibly by an unauthenticated background request.
+		appendActionsAndLog(wrap, res.actions || (job && job.actions), (job && job.logUrl) || res.logUrl);
 
 		return wrap;
 	}

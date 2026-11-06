@@ -500,6 +500,9 @@ final class Storage {
      * Nonce-protected admin-ajax download URL for a bundle.
      */
     public static function downloadUrl(string $name): string {
+        if ($name === '') {
+            return '';
+        }
         return add_query_arg(
             array(
                 'action' => 'slice_backup_download',

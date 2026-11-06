@@ -580,6 +580,12 @@ final class AjaxController {
     public static function lastReport(): void {
         self::guard();
         $report = get_site_option(Plugin::OPTION_REPORT);
+        if (is_array($report)) {
+            // Rebuilt for this request: the stored nonce may have been created by an
+            // unauthenticated background request when the restore finished, and would not
+            // verify for whoever is viewing the report now.
+            $report['logUrl'] = RestoreLog::downloadUrl((string) ($report['logFile'] ?? ''));
+        }
         wp_send_json_success(array('report' => is_array($report) ? $report : null));
     }
 

@@ -302,7 +302,12 @@ final class Job {
             'stalled'  => $this->isStalled(),
             'recovery' => (string) ($this->recovery['note'] ?? ''),
             'logFile'    => (string) ($this->data['logFile'] ?? ''),
+            // Built fresh for whoever is viewing this response (the admin's own browser, not
+            // whichever request happened to finish the job): a background loopback or cron
+            // request runs with no logged-in user, so a link built at finish time could be
+            // tied to the wrong (anonymous) account and fail nonce checks for everyone else.
             'logUrl'     => RestoreLog::downloadUrl((string) ($this->data['logFile'] ?? '')),
+            'bundleUrl'  => Storage::downloadUrl((string) ($this->data['result']['bundleFile'] ?? '')),
             'actions'  => $this->status === 'running' ? array() : array_values((array) ($this->data['actions'] ?? array())),
             'origin'   => $this->origin,
             'created'  => $this->created,
