@@ -67,17 +67,22 @@ final class LinkImporter {
      * Learns the file's size and a usable name, and makes sure the link actually serves a
      * file rather than an HTML page (a sign-in prompt, an error, or a "not shared" notice).
      *
+     * The probe response is always capped to a small number of bytes (limit_response_size),
+     * whether or not the server honors our Range header: a server that ignores Range and
+     * sends the whole file back here would otherwise buffer an unbounded amount of it in
+     * PHP memory for a multi-gigabyte bundle.
+     *
      * @param array{url: string, cookies: array} $resolved
-     * @return array{size: float, name: string, rangeOk: bool, firstBytes: string}
+     * @return array{size: float, name: string, rangeOk: bool}
      * @throws \RuntimeException When the link does not serve a downloadable file.
      */
     public static function probe(array $resolved): array {
-        $response = self::request($resolved, '0-' . (self::PROBE_BYTES - 1));
+        $response = self::request($resolved, '0-' . (self::PROBE_BYTES - 1), self::PROBE_BYTES * 4);
         $code = (int) wp_remote_retrieve_response_code($response);
         $contentType = (string) wp_remote_retrieve_header($response, 'content-type');
-        $body = (string) wp_remote_retrieve_body($response);
 
         if (stripos($contentType, 'text/html') !== false || stripos($contentType, 'text/plain') !== false) {
+            $body = (string) wp_remote_retrieve_body($response);
             throw new \RuntimeException(esc_html(self::explainHtmlResponse($body, (string) $resolved['provider'])));
         }
 
@@ -87,37 +92,55 @@ final class LinkImporter {
         }
 
         return array(
-            'size'       => $size,
-            'name'       => self::nameFrom($response, (string) $resolved['url']),
-            'rangeOk'    => $code === 206,
-            'firstBytes' => $body,
+            'size'    => $size,
+            'name'    => self::nameFrom($response, (string) $resolved['url']),
+            'rangeOk' => $code === 206,
         );
     }
 
     /**
-     * Downloads in fixed-size pieces, resumable across ticks. Falls back to one request per
-     * call when the server does not honor Range (some direct-download endpoints always send
-     * the whole file); that still keeps memory flat, since the body streams straight to disk
-     * in the same request, piece by piece is only how it is spread across ticks.
+     * Downloads in fixed-size pieces, resumable across ticks, when the server honors Range.
+     *
+     * Some direct-download endpoints ignore Range and always send the whole file; for those,
+     * a single request streams the body straight to disk (wp_remote_get's own 'stream' mode),
+     * which still keeps memory flat but cannot be split across ticks or resumed mid-transfer,
+     * since asking again would just restart the same full response.
      *
      * @param array{url: string, cookies: array} $resolved
-     * @param array<string, mixed>               $state Has size, offset, rangeOk, firstBytes (consumed once).
+     * @param array<string, mixed>               $state Has size, offset, rangeOk.
      */
     public static function downloadStep(array $resolved, string $target, array &$state, float $deadline): bool {
         $size = (float) $state['size'];
-        $chunk = (float) MemoryBudget::batchBytes();
 
-        if (!empty($state['firstBytes'])) {
-            // The probe already fetched the first bytes; do not fetch them again.
-            Cloud::appendChunk($target, (string) $state['firstBytes']);
-            $state['offset']     = (float) strlen((string) $state['firstBytes']);
-            $state['firstBytes'] = '';
-            if (empty($state['rangeOk'])) {
-                // The server ignored our probe Range and sent the whole file already.
-                return (float) $state['offset'] >= $size;
+        if (empty($state['rangeOk'])) {
+            $response = wp_remote_get((string) $resolved['url'], array(
+                'timeout'     => 20 * MINUTE_IN_SECONDS,
+                'redirection' => 5,
+                'cookies'     => (array) ($resolved['cookies'] ?? array()),
+                'user-agent'  => 'Slice Backup for WordPress',
+                'stream'      => true,
+                'filename'    => $target,
+            ));
+            if (is_wp_error($response)) {
+                throw new \RuntimeException(esc_html(sprintf(
+                    /* translators: %s: error message. */
+                    __('Could not reach the link: %s', 'slice-backup'),
+                    $response->get_error_message()
+                )));
             }
+            $code = (int) wp_remote_retrieve_response_code($response);
+            if ($code !== 200) {
+                throw new \RuntimeException(esc_html(sprintf(
+                    /* translators: %d: HTTP status code. */
+                    __('The link did not provide the file (HTTP %d).', 'slice-backup'),
+                    $code
+                )));
+            }
+            $state['offset'] = Storage::filesize($target);
+            return true;
         }
 
+        $chunk = (float) MemoryBudget::batchBytes();
         $first = true;
         while ((float) $state['offset'] < $size && ($first || microtime(true) < $deadline)) {
             $first = false;
@@ -133,11 +156,6 @@ final class LinkImporter {
             }
             Cloud::appendChunk($target, $body);
             $state['offset'] = $start + strlen($body);
-            if (!empty($state['rangeOk']) && strlen($body) < ($end - $start + 1.0) && (float) $state['offset'] < $size) {
-                // A short read mid-file on a server that does support Range is a real problem,
-                // not end-of-file; the throttled retry above already tried 3 times.
-                break;
-            }
         }
         return (float) $state['offset'] >= $size;
     }
@@ -150,7 +168,10 @@ final class LinkImporter {
      * @throws \RuntimeException On a transport error or an unexpected status.
      */
     private static function fetchRange(array $resolved, float $start, float $end): string {
-        $response = self::request($resolved, sprintf('%.0f-%.0f', $start, $end));
+        // A generous cap, not a tight one: a server that ignores our Range header entirely
+        // would otherwise return (and we would buffer) the whole remaining file in memory.
+        $limit    = (int) min(64 * MB_IN_BYTES, ($end - $start + 1.0) * 2 + MB_IN_BYTES);
+        $response = self::request($resolved, sprintf('%.0f-%.0f', $start, $end), $limit);
         $code     = (int) wp_remote_retrieve_response_code($response);
         if ($code !== 200 && $code !== 206) {
             throw new \RuntimeException(esc_html(sprintf(
@@ -159,6 +180,12 @@ final class LinkImporter {
                 $code
             )));
         }
+        if ($code === 200 && $start > 0.0) {
+            // The server ignored our Range header mid-transfer and sent the whole file again
+            // from the start: there is nothing safe to append, so the calling retry must fail
+            // rather than silently appending wrong bytes.
+            throw new \RuntimeException(esc_html__('The link stopped supporting partial downloads partway through. Try again, or download the file manually and upload it instead.', 'slice-backup'));
+        }
         return (string) wp_remote_retrieve_body($response);
     }
 
@@ -166,7 +193,7 @@ final class LinkImporter {
      * @param array{url: string, cookies: array} $resolved
      * @return array<string, mixed>|\WP_Error
      */
-    private static function request(array $resolved, string $range) {
+    private static function request(array $resolved, string $range, ?int $limitBytes = null) {
         $args = array(
             'timeout'     => 30,
             'redirection' => 5,
@@ -174,6 +201,9 @@ final class LinkImporter {
             'cookies'     => (array) ($resolved['cookies'] ?? array()),
             'user-agent'  => 'Slice Backup for WordPress',
         );
+        if ($limitBytes !== null) {
+            $args['limit_response_size'] = $limitBytes;
+        }
         $response = wp_remote_get((string) $resolved['url'], $args);
         if (is_wp_error($response)) {
             throw new \RuntimeException(esc_html(sprintf(
@@ -197,7 +227,7 @@ final class LinkImporter {
         if (self::hostIs($host, array('drive.google.com', 'docs.google.com'))) {
             return 'google-drive';
         }
-        if (self::hostIs($host, array('1drv.ms', 'onedrive.live.com')) || substr($host, -16) === '.sharepoint.com') {
+        if (self::hostIs($host, array('1drv.ms', 'onedrive.live.com', 'sharepoint.com'))) {
             return 'onedrive';
         }
         if (self::hostIs($host, array('dropbox.com', 'www.dropbox.com'))) {
@@ -232,8 +262,10 @@ final class LinkImporter {
             throw new \RuntimeException(esc_html__('Could not find a file in this Google Drive link. Right-click the backup file in Drive, choose Share > Copy link, and make sure access is set to "Anyone with the link".', 'slice-backup'));
         }
 
+        // Capped: a file small enough that Google skips the confirmation page would otherwise
+        // be sent here in full and buffered entirely in memory, just to read its content-type.
         $direct  = 'https://drive.google.com/uc?export=download&id=' . rawurlencode($id);
-        $probe   = wp_safe_remote_get($direct, array('timeout' => 30, 'redirection' => 5, 'cookies' => array()));
+        $probe   = wp_safe_remote_get($direct, array('timeout' => 30, 'redirection' => 5, 'cookies' => array(), 'limit_response_size' => self::MAX_INTERSTITIAL_BYTES));
         if (is_wp_error($probe)) {
             throw new \RuntimeException(esc_html(sprintf(
                 /* translators: %s: error message. */
@@ -284,7 +316,7 @@ final class LinkImporter {
     private static function resolveOneDrive(string $url): array {
         $host = strtolower((string) wp_parse_url($url, PHP_URL_HOST));
 
-        if ($host === '1drv.ms' || substr($host, -11) === '.1drv.ms') {
+        if (self::hostIs($host, array('1drv.ms'))) {
             $url = self::followRedirects($url);
         }
 
@@ -314,7 +346,7 @@ final class LinkImporter {
      */
     private static function followRedirects(string $url, int $hops = 5): string {
         for ($i = 0; $i < $hops; $i++) {
-            $response = wp_safe_remote_get($url, array('timeout' => 20, 'redirection' => 0));
+            $response = wp_safe_remote_get($url, array('timeout' => 20, 'redirection' => 0, 'limit_response_size' => 65536));
             if (is_wp_error($response)) {
                 throw new \RuntimeException(esc_html(sprintf(
                     /* translators: %s: error message. */

@@ -312,6 +312,34 @@ final class CliCommand {
     }
 
     /**
+     * Imports a bundle straight from a publicly-shared link (Google Drive, OneDrive,
+     * SharePoint, Dropbox, or a direct URL), without downloading it locally first.
+     *
+     * <url>
+     * : The "share" link. It must have open access ("anyone with the link").
+     *
+     * ## EXAMPLES
+     *
+     *     wp slice-backup fetch-link "https://drive.google.com/file/d/XXXX/view?usp=sharing" && wp slice-backup list
+     *
+     * @subcommand fetch-link
+     *
+     * @param string[] $args
+     */
+    public function fetch_link(array $args): void {
+        try {
+            $job = MigratorEngine::runToCompletion(MigratorEngine::startLinkImport((string) $args[0], 'cli'), array($this, 'progress'));
+            if ($job->status !== 'done') {
+                throw new \RuntimeException(esc_html($job->error));
+            }
+        } catch (\Throwable $e) {
+            \WP_CLI::error(Plugin::errorText($e));
+            return;
+        }
+        \WP_CLI::success(sprintf('Fetched %s. Restore it with: wp slice-backup import %s', $job->data['result']['bundleFile'], $job->data['result']['bundleFile']));
+    }
+
+    /**
      * Tests the saved cloud storage settings.
      *
      * @subcommand cloud-test

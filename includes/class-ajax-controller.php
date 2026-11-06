@@ -153,6 +153,10 @@ final class AjaxController {
                     $job = MigratorEngine::startPull(self::post('key'), array('export_type' => sanitize_key(self::post('export_type', 'full'))));
                     break;
 
+                case 'link_import':
+                    $job = MigratorEngine::startLinkImport(self::post('url'));
+                    break;
+
                 default:
                     throw new \InvalidArgumentException(esc_html__('Unknown job type.', 'slice-backup'));
             }

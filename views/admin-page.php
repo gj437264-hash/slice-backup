@@ -300,7 +300,21 @@ $slice_backup_problems = array_filter(
                         <button type="button" class="is-active" data-source="upload" aria-pressed="true"><?php esc_html_e('Upload a file', 'slice-backup'); ?></button>
                         <button type="button" data-source="saved" aria-pressed="false"><?php esc_html_e('Use a saved backup', 'slice-backup'); ?></button>
                         <button type="button" data-source="cloud" aria-pressed="false"><?php esc_html_e('From cloud storage', 'slice-backup'); ?></button>
+                        <button type="button" data-source="link" aria-pressed="false"><?php esc_html_e('From a link', 'slice-backup'); ?></button>
                         <button type="button" data-source="peer" aria-pressed="false"><?php esc_html_e('From another site', 'slice-backup'); ?></button>
+                    </div>
+
+                    <div id="slicebk-source-link" hidden>
+                        <p class="slicebk-muted"><?php esc_html_e('Paste a "share" link to a backup file in Google Drive, OneDrive, SharePoint, or Dropbox. Sharing must be set to "Anyone with the link".', 'slice-backup'); ?></p>
+                        <label class="slicebk-field">
+                            <span class="slicebk-field__label"><?php esc_html_e('Link to the backup file', 'slice-backup'); ?></span>
+                            <input type="url" id="slicebk-link-url" class="regular-text" spellcheck="false" autocomplete="off" placeholder="https://drive.google.com/file/d/…">
+                        </label>
+                        <div class="slicebk-inline">
+                            <button type="button" class="button button-primary" id="slicebk-link-start"><span class="dashicons dashicons-download" aria-hidden="true"></span> <?php esc_html_e('Fetch from this link', 'slice-backup'); ?></button>
+                            <span class="slicebk-test-result" id="slicebk-link-result" role="status"></span>
+                        </div>
+                        <p class="slicebk-muted slicebk-small"><?php esc_html_e('The file is downloaded straight to this server. You then choose what to restore below.', 'slice-backup'); ?></p>
                     </div>
 
                     <div id="slicebk-source-peer" hidden>

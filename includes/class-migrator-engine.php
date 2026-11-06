@@ -718,6 +718,8 @@ class MigratorEngine {
             'push'          => __('Sending to the other site', 'slice-backup'),
             'remote_export' => __('Creating the backup on the other site', 'slice-backup'),
             'pull_download' => __('Downloading from the other site', 'slice-backup'),
+            'resolve'       => __('Reading the link', 'slice-backup'),
+            'link_download' => __('Downloading from the link', 'slice-backup'),
             'finalize'      => __('Finishing', 'slice-backup'),
         );
         return $labels[$step] ?? $step;
@@ -1199,7 +1201,7 @@ class MigratorEngine {
             }
         }
         // A failed download leaves no partial bundle behind.
-        if ($failed && in_array($job->type, array('download', 'pull'), true) && !empty($job->data['final']) && is_file((string) $job->data['final'])) {
+        if ($failed && in_array($job->type, array('download', 'pull', 'link_import'), true) && !empty($job->data['final']) && is_file((string) $job->data['final'])) {
             wp_delete_file((string) $job->data['final']);
         }
     }
@@ -1442,10 +1444,9 @@ class MigratorEngine {
                 $job->data['name']     = wp_unique_filename(Storage::dir(), $probe['name']);
                 $job->data['remoteSize'] = $probe['size'];
                 $job->data['linkState']  = array(
-                    'size'       => $probe['size'],
-                    'offset'     => 0.0,
-                    'rangeOk'    => $probe['rangeOk'],
-                    'firstBytes' => $probe['firstBytes'],
+                    'size'    => $probe['size'],
+                    'offset'  => 0.0,
+                    'rangeOk' => $probe['rangeOk'],
                 );
                 self::setProgress($job, __('Reading the link', 'slice-backup'), 1.0, size_format($probe['size'], 1));
                 return true;
@@ -2348,7 +2349,8 @@ class MigratorEngine {
 
             case 'download':
             case 'pull':
-                if ($job->type === 'pull') {
+            case 'link_import':
+                if ($job->type === 'pull' || $job->type === 'link_import') {
                     $job->data['name'] = wp_unique_filename(Storage::dir(), (string) $job->data['name']);
                 }
                 $final = Storage::dir() . '/' . $job->data['name'];

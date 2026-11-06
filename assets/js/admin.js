@@ -324,7 +324,8 @@
 		restore: __('Restoring', D),
 		upload: __('Uploading to cloud storage', D),
 		download: __('Downloading from cloud storage', D),
-		pull: __('Fetching from the other site', D)
+		pull: __('Fetching from the other site', D),
+		link_import: __('Fetching from the link', D)
 	};
 
 	var Jobs = {
@@ -487,7 +488,7 @@
 		if (type === 'restore') {
 			return { onDone: showRestoreResult };
 		}
-		if (type === 'download' || type === 'pull') {
+		if (type === 'download' || type === 'pull' || type === 'link_import') {
 			return { onDone: afterCloudDownload };
 		}
 		return {
@@ -985,7 +986,7 @@
 			button.classList.toggle('is-active', active);
 			button.setAttribute('aria-pressed', active ? 'true' : 'false');
 		});
-		['upload', 'saved', 'cloud', 'peer'].forEach(function (s) {
+		['upload', 'saved', 'cloud', 'link', 'peer'].forEach(function (s) {
 			var node = $('#slicebk-source-' + s);
 			if (node) {
 				node.hidden = s !== source;
@@ -1053,7 +1054,7 @@
 
 	function afterCloudDownload(job) {
 		var name = job.result && job.result.bundleFile;
-		toast(__('Downloaded from cloud storage.', D));
+		toast(job.type === 'link_import' ? __('Fetched from the link.', D) : __('Downloaded from cloud storage.', D));
 		if (name) {
 			state.bundles = null;
 			loadBackups().then(function () { useSavedBundle(name); });
@@ -1899,6 +1900,29 @@
 				Jobs.start('pull', { key: key, export_type: $('#slicebk-pull-preset').value }, handlersFor('pull')).catch(function (error) {
 					toast(error.message, 'error');
 				});
+			});
+		});
+	}
+
+	/* Fetch from a share link */
+	var linkStart = $('#slicebk-link-start');
+	if (linkStart) {
+		linkStart.addEventListener('click', function () {
+			var input = $('#slicebk-link-url');
+			var url = input.value.trim();
+			var result = $('#slicebk-link-result');
+			result.textContent = '';
+			if (!url) {
+				result.textContent = __('Paste a link first.', D);
+				return;
+			}
+			linkStart.classList.add('is-busy');
+			linkStart.disabled = true;
+			Jobs.start('link_import', { url: url }, handlersFor('link_import')).catch(function (error) {
+				result.textContent = error.message;
+			}).then(function () {
+				linkStart.classList.remove('is-busy');
+				linkStart.disabled = false;
 			});
 		});
 	}

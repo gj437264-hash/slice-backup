@@ -64,6 +64,7 @@ require_once SLICE_BACKUP_PATH . 'includes/class-sftp-destination.php';
 require_once SLICE_BACKUP_PATH . 'includes/class-dropbox-error.php';
 require_once SLICE_BACKUP_PATH . 'includes/class-dropbox-destination.php';
 require_once SLICE_BACKUP_PATH . 'includes/class-cloud.php';
+require_once SLICE_BACKUP_PATH . 'includes/class-link-importer.php';
 require_once SLICE_BACKUP_PATH . 'includes/class-peer-error.php';
 require_once SLICE_BACKUP_PATH . 'includes/class-peer.php';
 require_once SLICE_BACKUP_PATH . 'includes/class-scheduler.php';
