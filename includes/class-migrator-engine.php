@@ -893,7 +893,7 @@ class MigratorEngine {
         // Nudge it at most once a minute.
         $kick = $job->workDir() . '/kick';
         if (!is_file($kick) || (time() - (int) filemtime($kick)) > MINUTE_IN_SECONDS) {
-            @touch($kick); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            Storage::filesystem()->touch($kick);
             self::scheduleBackgroundTick($job);
         }
     }
@@ -1159,7 +1159,7 @@ class MigratorEngine {
             $dst = $target . '/' . $relative;
             if ($item->isDir()) {
                 wp_mkdir_p($dst);
-            } elseif (@copy($item->getPathname(), $dst)) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            } elseif (@copy($item->getPathname(), $dst)) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- Restoring the site's own must-use plugins into wp-content/mu-plugins is a declared restore component, not this plugin saving its own data.
                 $copied++;
             } else {
                 $failed++;

@@ -162,7 +162,7 @@ final class RestoreGuard {
         }
         $flag = self::flag($job);
         if (is_file($flag)) {
-            @touch($flag); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            Storage::filesystem()->touch($flag);
         } else {
             Storage::filesystem()->put_contents($flag, (string) time(), 0644);
         }

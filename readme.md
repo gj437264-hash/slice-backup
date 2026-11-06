@@ -6,13 +6,13 @@
 
 **Contributors:** wpengineers  
 **Tags:** backup, migration, restore, cloud backup, encryption  
-**Requires WordPress:** 6.2+  
+**Requires at least:** 6.2  
 **Tested up to:** 7.1  
-**Requires PHP:** 7.4+  
-**Stable version:** 1.0.0
+**Requires PHP:** 7.4  
+**Stable tag:** 1.1.0
 **License:** GPLv2 or later
 
-Back up, move, and restore WordPress sites with a complete, resumable backup and migration solution. Encrypt your backups, schedule automatic jobs, send them to your own cloud storage, or transfer sites directly between servers.
+Back up, move and restore WordPress sites in resumable steps, encrypted, scheduled, to your own cloud storage or another server.
 
 ---
 
@@ -586,6 +586,14 @@ slice_backup_after_restore
 ---
 
 ## Changelog
+
+### 1.1.0
+
+- Imports can now be fetched directly from a public Google Drive, OneDrive/SharePoint or Dropbox share link, without downloading the bundle locally first.
+- Restores now stage the database and plugin/theme files and switch them in atomically, keeping a safety copy: a restore can be undone, or its safety copy discarded, from the Restore tab or `wp slice-backup rollback`.
+- Conflicting plugins are deactivated and a conflicting theme falls back to an installed default theme (or downloads one) automatically, so a restore keeps going instead of leaving a broken site.
+- A crashed step (out of memory, a host time limit) is now detected and retried in smaller pieces instead of repeating indefinitely; database export and search-replace batches are sized by memory rather than row count.
+- Every restore now produces a detailed, downloadable report of what happened and any follow-up action needed.
 
 ### 1.0.0-beta
 

@@ -107,7 +107,7 @@ final class RestoreRollback {
             foreach ($pairs as $pair) {
                 $parts[] = DbUtil::ident($pair[0]) . ' TO ' . DbUtil::ident($pair[1]);
             }
-            if ($wpdb->query('RENAME TABLE ' . implode(', ', $parts)) === false) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Identifiers quoted by DbUtil::ident().
+            if ($wpdb->query('RENAME TABLE ' . implode(', ', $parts)) === false) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifiers quoted by DbUtil::ident().
                 throw new \RuntimeException(esc_html(sprintf(
                     /* translators: %s: database error. */
                     __('Swapping the database tables failed: %s', 'slice-backup'),
@@ -118,7 +118,7 @@ final class RestoreRollback {
         }
         // Other database drivers: one table at a time.
         foreach ($pairs as $pair) {
-            if ($wpdb->query('ALTER TABLE ' . DbUtil::ident($pair[0]) . ' RENAME TO ' . DbUtil::ident($pair[1])) === false) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Identifiers quoted by DbUtil::ident().
+            if ($wpdb->query('ALTER TABLE ' . DbUtil::ident($pair[0]) . ' RENAME TO ' . DbUtil::ident($pair[1])) === false) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifiers quoted by DbUtil::ident().
                 throw new \RuntimeException(esc_html(sprintf(
                     /* translators: %s: database error. */
                     __('Swapping the database tables failed: %s', 'slice-backup'),
@@ -135,7 +135,7 @@ final class RestoreRollback {
         global $wpdb;
         foreach ($tables as $table) {
             if ($table !== '' && DbUtil::isInternalTable($table)) {
-                $wpdb->query('DROP TABLE IF EXISTS ' . DbUtil::ident($table)); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Identifier quoted by DbUtil::ident().
+                $wpdb->query('DROP TABLE IF EXISTS ' . DbUtil::ident($table)); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier quoted by DbUtil::ident().
             }
         }
     }
