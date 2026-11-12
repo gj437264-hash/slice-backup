@@ -282,6 +282,29 @@ final class LinkImporter {
         }
 
         $body = (string) wp_remote_retrieve_body($probe);
+
+        // Google now serves the confirmed download from a different host
+        // (drive.usercontent.google.com) than the initial uc?export=download request, with
+        // the real target named in the interstitial page's own <form action>. Follow that
+        // form (action + every hidden field) rather than assuming the host never changes.
+        if (preg_match('/<form[^>]+action="([^"]+)"/i', $body, $fm)) {
+            $action = html_entity_decode($fm[1]);
+            $params = array();
+            if (preg_match_all('/<input\b[^>]*>/i', $body, $inputs)) {
+                foreach ($inputs[0] as $inputTag) {
+                    if (preg_match('/name="([^"]+)"/i', $inputTag, $nm)
+                        && preg_match('/value="([^"]*)"/i', $inputTag, $vm)
+                    ) {
+                        $params[$nm[1]] = html_entity_decode($vm[1]);
+                    }
+                }
+            }
+            if ($action !== '' && !empty($params)) {
+                $direct2 = add_query_arg($params, $action);
+                return array('url' => $direct2, 'cookies' => $cookies, 'provider' => 'google-drive');
+            }
+        }
+
         if (preg_match('/confirm=([0-9A-Za-z_\-]+)/', $body, $m)
             || preg_match('/name="confirm"[^>]*value="([^"]+)"/', $body, $m)
         ) {
