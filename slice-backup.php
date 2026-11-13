@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       Slice Backup – Backup, Restore & Migration
- * Plugin URI:        https://github.com/gj437264-hash/slice-backup-main/
+ * Plugin URI:        https://gj437264-hash.github.io/slice-backup-main/
  * Description:       Back up, restore and migrate WordPress in small resumable steps — encrypted, scheduled, and sent to your own cloud storage, SFTP server, Dropbox or another site.
  * Version:           1.1.0
  * Requires at least: 6.2
