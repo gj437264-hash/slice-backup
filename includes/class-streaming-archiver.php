@@ -119,9 +119,14 @@ class StreamingArchiver {
 
         if (!empty($components['uploads'])) {
             if ($isSubsite && $subsiteId > 1) {
-                $siteDir = $uploadDir . '/sites/' . $subsiteId;
-                $legacy  = wp_normalize_path(WP_CONTENT_DIR . '/blogs.dir/' . $subsiteId . '/files');
-                $add(is_dir($siteDir) ? $siteDir : $legacy, $standalone ? 'uploads' : 'uploads/sites/' . $subsiteId, 'uploads', array($storage));
+                // Ask the target site for its own basedir rather than guessing the modern
+                // "/sites/<id>" layout: this also resolves correctly for a site still using
+                // the legacy "blogs.dir" layout (ms_files_rewriting) or a custom upload path.
+                switch_to_blog($subsiteId);
+                $siteUploads = wp_upload_dir(null, false);
+                $siteDir     = rtrim(wp_normalize_path((string) $siteUploads['basedir']), '/');
+                restore_current_blog();
+                $add($siteDir, $standalone ? 'uploads' : 'uploads/sites/' . $subsiteId, 'uploads', array($storage));
             } elseif ($isSubsite) {
                 $add($uploadDir, 'uploads', 'uploads', array($storage, $uploadDir . '/sites'));
             } else {
@@ -154,9 +159,16 @@ class StreamingArchiver {
                 continue;
             }
             if (!empty($components['root_files']) && preg_match(self::ROOT_FILES_PATTERN, $file)) {
-                $lines .= self::line('root/' . $file, ABSPATH . $file);
+                $source = ABSPATH . $file;
+                if ($file === 'wp-config.php') {
+                    // Never carry the live auth keys/salts or DB password off-site.
+                    $redacted = dirname($listFile) . '/wp-config.redacted.php';
+                    file_put_contents($redacted, SecuritySanitizer::redactWpConfig((string) file_get_contents($source))); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents, WordPress.WP.AlternativeFunctions.file_system_read_file_get_contents
+                    $source = $redacted;
+                }
+                $lines .= self::line('root/' . $file, $source);
                 $files++;
-                $bytes += (float) filesize(ABSPATH . $file);
+                $bytes += (float) filesize($source);
             }
             if (!empty($components['wp_core']) && $file !== 'wp-config.php' && preg_match('/^(index|xmlrpc|wp-[a-z-]+)\.php$/', $file)) {
                 $lines .= self::line('core/' . $file, ABSPATH . $file);

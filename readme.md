@@ -4,7 +4,7 @@
 [![PHP](https://img.shields.io/badge/PHP-7.4%2B-777BB4?logo=php&logoColor=white)](https://www.php.net/)
 [![License](https://img.shields.io/badge/License-GPLv2%2B-blue)](https://www.gnu.org/licenses/gpl-2.0.html)
 
-**Contributors:** wpengineers  
+**Contributors:** gj437264, wpengineers  
 **Tags:** backup, migration, restore, cloud backup, encryption  
 **Requires at least:** 6.2  
 **Tested up to:** 7.1  
@@ -487,54 +487,53 @@ If another plugin has already loaded phpseclib 3, Slice Backup uses the existing
 
 ## External Services
 
-Each external service is contacted **only after you configure it**, using your own account or credentials.
+Each external service below is contacted **only after you configure or explicitly use it**, with your own account, credentials, or a link you paste in. Slice Backup does not phone home or send data to its own authors.
 
-### Cloud Storage
+### Cloud Storage (S3-compatible)
 
-Supported services include:
+Used to store and retrieve your backup bundles in a bucket you own, so backups exist outside your server.
 
-- Amazon S3
-- Cloudflare R2
-- Google Cloud Storage
-- Wasabi
-- Backblaze B2
-- DigitalOcean Spaces
-- Custom S3-compatible endpoints
+Only contacted when you configure cloud storage and run a backup, restore, "Test Connection", or retention-cleanup operation. At that time, the bundle's bytes (upload/download) and the request metadata needed to address and sign the call (bucket name, object key, your access key, standard S3 request headers) are sent to the endpoint you configured; nothing is sent otherwise.
 
-Depending on the operation, backup bundles may be:
+Supported providers, with their own terms and privacy policy:
 
-- Uploaded to your bucket
-- Listed from your bucket
-- Downloaded from your bucket
-- Deleted from your bucket
+- **Amazon S3** — [Terms](https://aws.amazon.com/agreement/), [Privacy](https://aws.amazon.com/privacy/)
+- **Cloudflare R2** — [Terms](https://www.cloudflare.com/service-specific-terms-application-services/), [Privacy](https://www.cloudflare.com/privacypolicy/)
+- **Google Cloud Storage** (via HMAC keys) — [Terms](https://cloud.google.com/terms), [Privacy](https://policies.google.com/privacy)
+- **Wasabi** — [Terms](https://wasabi.com/legal-terms/), [Privacy](https://wasabi.com/privacy-policy/)
+- **Backblaze B2** — [Terms](https://www.backblaze.com/company/terms.html), [Privacy](https://www.backblaze.com/company/privacy.html)
+- **DigitalOcean Spaces** — [Terms](https://www.digitalocean.com/legal/terms-of-service-agreement), [Privacy](https://www.digitalocean.com/legal/privacy-policy)
+- **MinIO, or another custom S3-compatible endpoint you point the plugin at** — this is infrastructure you (or your own host) operate or choose; review that provider's own terms and privacy policy.
 
-You are responsible for reviewing the applicable provider's terms and privacy policy.
+### Dropbox (storage destination, and importing a shared link)
 
-### Dropbox
+Used as a backup storage destination, and to fetch a bundle you paste a Dropbox share link to.
 
-Slice Backup communicates with:
-
-```text
-api.dropboxapi.com
-content.dropboxapi.com
-```
-
-Operations take place within the Dropbox application's configured App folder.
+Only contacted when you connect a Dropbox account as a destination, run a backup/restore/"Test Connection" against it, or paste a Dropbox share link to import. Slice Backup communicates with `api.dropboxapi.com` and `content.dropboxapi.com`, sending the bundle's bytes and an OAuth 2 access token for your own Dropbox app; storage operations are confined to that app's App folder.
 
 - [Dropbox Terms](https://www.dropbox.com/terms)
 - [Dropbox Privacy Policy](https://www.dropbox.com/privacy)
 
+### Google Drive and OneDrive/SharePoint (importing a shared link)
+
+Used only by the **"Import from a link"** feature, so a backup bundle can be pulled straight into the site instead of uploading it through the browser.
+
+Only contacted when you paste a public "share" link and start the import. Slice Backup sends an HTTP GET request (with a Range header) to the provider's file-content URL for that specific link; it does not sign in to, browse, or access anything else in your Google or Microsoft account.
+
+- **Google Drive** — [Terms](https://policies.google.com/terms), [Privacy Policy](https://policies.google.com/privacy)
+- **OneDrive / SharePoint** — [Microsoft Services Agreement](https://www.microsoft.com/en-us/servicesagreement), [Microsoft Privacy Statement](https://privacy.microsoft.com/en-us/privacystatement)
+
 ### SFTP
 
-Slice Backup communicates with the SFTP server that you configure.
+Slice Backup communicates with the SFTP server that you configure, sending/receiving the bundle's bytes using the credentials or key you provide. This is typically your own server or one operated by your own host, so no single third-party terms/privacy link applies.
 
 ### Site-to-Site Transfer
 
-Slice Backup communicates with another WordPress site only when you provide a valid transfer key.
+Slice Backup communicates with another WordPress site only when you create or enter a valid transfer key, sending (or receiving) the backup bundle directly between the two sites you control.
 
 ### Webhooks
 
-Slice Backup sends a JSON summary of scheduled backup operations to the webhook URL you configure.
+Only contacted when you configure a webhook URL. After each scheduled backup, Slice Backup sends a JSON summary (success/failure, size, duration) to that URL via an HTTP POST. Since the URL is one you supply (for example your own Slack, Discord, or Zapier endpoint), review that destination's own terms and privacy policy.
 
 ---
 

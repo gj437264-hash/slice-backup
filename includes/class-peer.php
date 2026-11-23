@@ -119,12 +119,42 @@ final class Peer {
             return $deny(__('Invalid transfer signature. Check that the key was copied completely.', 'slice-backup'));
         }
 
-        // Single use: a captured request cannot be replayed.
-        $seen = 'slice_backup_peer_n_' . md5($nonce);
-        if (get_site_transient($seen)) {
+        // Single use: a captured request cannot be replayed. add_option() is used instead of
+        // get/set on a transient because the option_name column has a UNIQUE key, so the
+        // database itself rejects a second insert for the same nonce even if two requests
+        // reach this check at the same instant; a transient's get-then-set has no such
+        // guarantee, and on an external object cache it can also be evicted early, which
+        // would let an identical captured request through again within the signed window.
+        if (!self::claimNonce($nonce)) {
             return $deny(__('This request was already used.', 'slice-backup'));
         }
-        set_site_transient($seen, 1, 2 * self::MAX_SKEW);
+
+        return true;
+    }
+
+    /**
+     * Atomically claims a nonce so it can never be accepted twice. Returns false when it was
+     * already claimed (a replay). Also sweeps a few long-expired markers so this table never
+     * grows unbounded; expired rows are harmless for security (the timestamp check alone
+     * already rejects anything that old), so the sweep only needs to be best-effort.
+     */
+    private static function claimNonce(string $nonce): bool {
+        global $wpdb;
+
+        $key = 'slice_backup_peer_n_' . md5($nonce);
+        if (!add_option($key, (string) (time() + 2 * self::MAX_SKEW), '', 'no')) {
+            return false;
+        }
+
+        if (wp_rand(1, 50) === 1) {
+            $wpdb->query(
+                $wpdb->prepare(
+                    "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s AND CAST(option_value AS UNSIGNED) < %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                    $wpdb->esc_like('slice_backup_peer_n_') . '%',
+                    time()
+                )
+            );
+        }
 
         return true;
     }

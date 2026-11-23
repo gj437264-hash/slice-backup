@@ -267,29 +267,27 @@ if (!defined('ABSPATH')) {
 		|| $isRest;
 
 	// Every request: load only Slice Backup. Restored plugins may be incomplete or
-	// incompatible until the restore ends, and their settings must not be overwritten.
+	// incompatible until the restore ends, so their code must not run yet. This only
+	// overrides what THIS guarded request reads; it never blocks a write, so a user who
+	// activates/deactivates a plugin (including Slice Backup itself) while a restore is
+	// running still has that change saved for real, visible once the restore ends.
 	$basename = (string) $config['basename'];
-	$keepOld  = static function ($value, $old) {
-		return $old;
-	};
 	if (!empty($config['multisite'])) {
 		add_filter('pre_site_option_active_sitewide_plugins', static function () use ($basename) {
 			return array($basename => time());
 		}, PHP_INT_MAX);
-		add_filter('pre_update_site_option_active_sitewide_plugins', $keepOld, PHP_INT_MAX, 2);
 	}
 	add_filter('pre_option_active_plugins', static function () use ($basename, $config) {
 		return empty($config['multisite']) ? array($basename) : array();
 	}, PHP_INT_MAX);
-	add_filter('pre_update_option_active_plugins', $keepOld, PHP_INT_MAX, 2);
 
 	// Load no theme code. The real theme is checked and switched on when the restore ends.
+	// Read-only, for the same reason as above: it never blocks a user's own theme switch.
 	$noTheme = static function () {
 		return 'slice-backup-no-theme';
 	};
 	add_filter('template', $noTheme, PHP_INT_MAX);
 	add_filter('stylesheet', $noTheme, PHP_INT_MAX);
-	add_filter('validate_current_theme', '__return_false', PHP_INT_MAX);
 
 	// The restored database may come from another WordPress version: no upgrade screen mid-restore.
 	add_filter('pre_option_db_version', static function () {

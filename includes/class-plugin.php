@@ -70,9 +70,11 @@ final class Plugin {
     public static function deactivate(): void {
         $job = Job::active();
         if ($job !== null && $job->type === 'restore') {
-            // A restore is replacing this site: ask it to stop safely instead of pulling the
-            // guard away mid-restore. While the guard is active, plugin activation changes are
-            // not saved, so Slice Backup stays active until the restore has ended.
+            // A restore is replacing this site: ask it to stop safely rather than pulling the
+            // guard away mid-copy. The guard only masks reads during its own requests, so this
+            // deactivation (and the active_plugins change WordPress saves right after this
+            // hook returns) still takes effect; the guard removes itself once the restore ends
+            // or, failing that, after RestoreGuard::MAX_IDLE_SECONDS of no progress.
             $job->requestCancel();
             return;
         }
@@ -221,7 +223,7 @@ final class Plugin {
             ),
             'root_files' => array(
                 'label'       => __('Server config files', 'slice-backup'),
-                'description' => __('wp-config.php, .htaccess, robots.txt and similar', 'slice-backup'),
+                'description' => __('wp-config.php, .htaccess, robots.txt and similar. Authentication keys/salts and the database password are redacted before wp-config.php is stored.', 'slice-backup'),
                 'icon'        => 'dashicons-media-code',
             ),
             'wp_core'    => array(

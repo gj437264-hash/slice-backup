@@ -17,6 +17,37 @@ if (!defined('ABSPATH')) {
  * Archive path validation.
  */
 final class SecuritySanitizer {
+    /** define() names whose value must never leave the site in a backup bundle. */
+    private const WP_CONFIG_SECRET_CONSTANTS = array(
+        'AUTH_KEY',
+        'SECURE_AUTH_KEY',
+        'LOGGED_IN_KEY',
+        'NONCE_KEY',
+        'AUTH_SALT',
+        'SECURE_AUTH_SALT',
+        'LOGGED_IN_SALT',
+        'NONCE_SALT',
+        'DB_PASSWORD',
+    );
+
+    /**
+     * Returns wp-config.php's contents with authentication keys/salts and the database
+     * password replaced by a placeholder, so a backup bundle never carries them off-site.
+     * Everything else (custom defines, DB_NAME/DB_HOST/DB_USER, site-specific code) is kept
+     * so the file still documents the source site's configuration.
+     */
+    public static function redactWpConfig(string $contents): string {
+        $names = implode('|', array_map('preg_quote', self::WP_CONFIG_SECRET_CONSTANTS));
+
+        return (string) preg_replace_callback(
+            '/(define\s*\(\s*[\'"](' . $names . ')[\'"]\s*,\s*)([\'"])(.*?)(\3)(\s*\)\s*;)/s',
+            static function (array $m): string {
+                return $m[1] . $m[3] . 'redacted-by-slice-backup' . $m[5] . $m[6];
+            },
+            $contents
+        );
+    }
+
     /**
      * Resolves an archive entry name inside $baseDirectory, or throws if it would escape it.
      *
