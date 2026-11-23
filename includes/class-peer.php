@@ -147,7 +147,9 @@ final class Peer {
         }
 
         if (wp_rand(1, 50) === 1) {
-            $wpdb->query(
+            // Bulk delete by a wildcarded option_name: no wp_cache_* equivalent applies, and
+            // the option names being swept were never individually cached by this plugin.
+            $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                 $wpdb->prepare(
                     "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s AND CAST(option_value AS UNSIGNED) < %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
                     $wpdb->esc_like('slice_backup_peer_n_') . '%',

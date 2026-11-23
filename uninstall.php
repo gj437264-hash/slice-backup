@@ -30,8 +30,10 @@ wp_clear_scheduled_hook('slice_backup_scheduled_backup');
 wp_unschedule_hook('slice_backup_job_tick');
 
 // Site-to-site transfer's replay-protection markers (short-lived; this just sweeps any left).
+// Bulk delete by a wildcarded option_name: no wp_cache_* equivalent applies, and the option
+// names being swept were never individually cached by this plugin.
 global $wpdb;
-$wpdb->query(
+$wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
     $wpdb->prepare(
         "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $wpdb->esc_like('slice_backup_peer_n_') . '%'
