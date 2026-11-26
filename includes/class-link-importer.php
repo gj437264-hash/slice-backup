@@ -49,6 +49,12 @@ final class LinkImporter {
         if (!in_array(strtolower($scheme), array('http', 'https'), true)) {
             throw new \RuntimeException(esc_html__('That does not look like a web link. Paste the "share" link to the backup file.', 'slice-backup'));
         }
+        // Checked here so the user is told straight away, rather than part-way through a
+        // download; every request below is sent with wp_safe_remote_get, which applies the
+        // same rule again to whatever the link redirects to.
+        if (!wp_http_validate_url($url)) {
+            throw new \RuntimeException(esc_html__('That link cannot be used: it is not a public address. Paste a public "share" link, or use Restore > From another site to move a bundle between two servers you control.', 'slice-backup'));
+        }
 
         $provider = self::detectProvider($url);
         switch ($provider) {
@@ -113,7 +119,10 @@ final class LinkImporter {
         $size = (float) $state['size'];
 
         if (empty($state['rangeOk'])) {
-            $response = wp_remote_get((string) $resolved['url'], array(
+            // wp_safe_remote_get, not wp_remote_get: the address comes from a link the user
+            // pasted, and a public link can redirect anywhere, so the site must not be made
+            // to fetch a private or loopback address.
+            $response = wp_safe_remote_get((string) $resolved['url'], array(
                 'timeout'     => 20 * MINUTE_IN_SECONDS,
                 'redirection' => 5,
                 'cookies'     => (array) ($resolved['cookies'] ?? array()),
@@ -204,7 +213,9 @@ final class LinkImporter {
         if ($limitBytes !== null) {
             $args['limit_response_size'] = $limitBytes;
         }
-        $response = wp_remote_get((string) $resolved['url'], $args);
+        // wp_safe_remote_get: see downloadStep(). The link, and anything it redirects to,
+        // must resolve to a public address.
+        $response = wp_safe_remote_get((string) $resolved['url'], $args);
         if (is_wp_error($response)) {
             throw new \RuntimeException(esc_html(sprintf(
                 /* translators: %s: error message. */
@@ -347,7 +358,7 @@ final class LinkImporter {
         if (self::hostIs($host, array('onedrive.live.com'))) {
             // Personal OneDrive: the public "shares" API serves file content for an
             // encoded share URL, no sign-in needed for an "anyone with the link" share.
-            $encoded = 'u!' . rtrim(strtr(base64_encode($url), '+/', '-_'), '=');
+            $encoded = 'u!' . rtrim(strtr(base64_encode($url), '+/', '-_'), '='); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- The share API addresses a link by its base64url form.
             return array(
                 'url'      => 'https://api.onedrive.com/v1.0/shares/' . $encoded . '/root/content',
                 'cookies'  => array(),

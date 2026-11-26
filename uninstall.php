@@ -19,6 +19,7 @@ $slice_backup_options = array(
     'slice_backup_lock',
     'slice_backup_schedule_last',
     'slice_backup_retention_error',
+    'slice_backup_rollback',
 );
 foreach ($slice_backup_options as $slice_backup_option) {
     delete_option($slice_backup_option);

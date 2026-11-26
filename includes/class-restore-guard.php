@@ -36,7 +36,12 @@ final class RestoreGuard {
     /** File name in the must-use plugins folder. Loads before other must-use plugins. */
     public const FILE = '0-slice-backup-restore-guard.php';
 
-    /** Settings of the current restore, read by the guard at runtime (not PHP, so never cached by OPcache). */
+    /**
+     * Name the settings file had in the must-use plugins folder up to version 1.1.0. The
+     * settings now live with the restore job's other working files under wp-content/uploads;
+     * only the must-use plugin itself, which can live nowhere else, is still written here.
+     * The name is kept so an old file (or one inside a backup bundle) is still recognised.
+     */
     public const CONFIG_FILE = 'slice-backup-restore-guard.json';
 
     /** Marker that identifies files written by this plugin. */
@@ -57,8 +62,19 @@ final class RestoreGuard {
         return self::dir() . '/' . self::FILE;
     }
 
-    public static function configPath(): string {
+    /**
+     * The settings file left in mu-plugins by version 1.1.0 and earlier.
+     */
+    public static function legacyConfigPath(): string {
         return self::dir() . '/' . self::CONFIG_FILE;
+    }
+
+    /**
+     * Where this restore's guard settings live: with the job's other working files, inside
+     * the plugin's folder under wp_upload_dir(), which denies direct web access.
+     */
+    public static function configPath(Job $job): string {
+        return wp_normalize_path($job->workDir() . '/guard.json');
     }
 
     private static function flag(Job $job): string {
@@ -90,6 +106,7 @@ final class RestoreGuard {
             'signature'  => self::SIGNATURE,
             'job'        => $job->id,
             'flag'       => self::flag($job),
+            'settings'   => self::configPath($job),
             'basename'   => plugin_basename(SLICE_BACKUP_FILE),
             'multisite'  => is_multisite(),
             'restNs'     => RestController::NAMESPACE_V1,
@@ -128,6 +145,11 @@ final class RestoreGuard {
      * @param array<string, mixed> $config
      */
     private static function writeFiles(array $config): bool {
+        $settings = (string) ($config['settings'] ?? '');
+        if ($settings === '') {
+            return false;
+        }
+
         $fs  = Storage::filesystem();
         $dir = self::dir();
         if (!is_dir($dir)) {
@@ -137,7 +159,7 @@ final class RestoreGuard {
             return false;
         }
 
-        foreach (array(self::configPath() => (string) wp_json_encode($config), self::path() => self::template()) as $file => $contents) {
+        foreach (array($settings => (string) wp_json_encode($config), self::path() => self::template($settings)) as $file => $contents) {
             if (is_file($file) && (string) file_get_contents($file) === $contents) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
                 continue;
             }
@@ -166,7 +188,7 @@ final class RestoreGuard {
         } else {
             Storage::filesystem()->put_contents($flag, (string) time(), 0644);
         }
-        if (!is_file(self::path()) || !is_file(self::configPath())) {
+        if (!is_file(self::path()) || !is_file(self::configPath($job))) {
             self::writeFiles((array) ($job->data['guardConfig'] ?? array()));
         }
     }
@@ -175,7 +197,11 @@ final class RestoreGuard {
      * Removes the guard (when it is ours) and the job's flag.
      */
     public static function remove(?Job $job = null): void {
-        foreach (array(self::path(), self::configPath()) as $file) {
+        $files = array(self::path(), self::legacyConfigPath());
+        if ($job !== null) {
+            $files[] = self::configPath($job);
+        }
+        foreach ($files as $file) {
             if (!is_file($file)) {
                 continue;
             }
@@ -218,11 +244,13 @@ final class RestoreGuard {
     }
 
     /**
-     * The must-use plugin. Plain PHP 7.4, the same for every restore, no dependency on this
-     * plugin's classes. It reads the restore's settings from the JSON file next to it.
+     * The must-use plugin. Plain PHP 7.4, no dependency on this plugin's classes. It reads
+     * the restore's settings from the job's own folder under wp-content/uploads; the only
+     * thing written to the must-use plugins folder is this one file, which must live there
+     * to do its job and is removed as soon as the restore ends.
      */
-    private static function template(): string {
-        return <<<'GUARD'
+    private static function template(string $settingsFile): string {
+        $guard = <<<'GUARD'
 <?php
 /**
  * Plugin Name: Slice Backup restore guard
@@ -234,7 +262,7 @@ if (!defined('ABSPATH')) {
 }
 
 (static function () {
-	$configFile = __DIR__ . '/slice-backup-restore-guard.json';
+	$configFile = '%%SETTINGS_FILE%%';
 	$config     = is_file($configFile) ? json_decode((string) file_get_contents($configFile), true) : null;
 	$flag       = is_array($config) && !empty($config['flag']) ? (string) $config['flag'] : '';
 	$plugin     = is_array($config) && !empty($config['basename']) ? WP_PLUGIN_DIR . '/' . $config['basename'] : '';
@@ -252,11 +280,13 @@ if (!defined('ABSPATH')) {
 
 	define('SLICE_BACKUP_RESTORE_GUARD', (string) ($config['job'] ?? '1'));
 
-	$uri     = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+	// Read-only: these only decide whether this request gets the maintenance page. They are
+	// still unslashed and sanitized, like any other request value.
+	$uri     = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
 	$path    = (string) parse_url($uri, PHP_URL_PATH);
-	$script  = isset($_SERVER['SCRIPT_FILENAME']) ? basename((string) $_SERVER['SCRIPT_FILENAME']) : '';
+	$script  = isset($_SERVER['SCRIPT_FILENAME']) ? basename(sanitize_text_field(wp_unslash($_SERVER['SCRIPT_FILENAME']))) : '';
 	$ns      = (string) $config['restNs'];
-	$route   = isset($_GET['rest_route']) ? '/' . ltrim((string) $_GET['rest_route'], '/') : '';
+	$route   = isset($_GET['rest_route']) && is_string($_GET['rest_route']) ? '/' . ltrim(sanitize_text_field(wp_unslash($_GET['rest_route'])), '/') : '';
 	$isRest  = strpos($route, '/' . $ns . '/') === 0
 		|| (bool) preg_match('#/' . preg_quote((string) $config['restPrefix'], '#') . '/' . preg_quote($ns, '#') . '(/|$)#', $path);
 	$allowed = (defined('WP_CLI') && WP_CLI)
@@ -266,20 +296,33 @@ if (!defined('ABSPATH')) {
 		|| $script === 'wp-login.php'
 		|| $isRest;
 
-	// Every request: load only Slice Backup. Restored plugins may be incomplete or
-	// incompatible until the restore ends, so their code must not run yet. This only
-	// overrides what THIS guarded request reads; it never blocks a write, so a user who
-	// activates/deactivates a plugin (including Slice Backup itself) while a restore is
-	// running still has that change saved for real, visible once the restore ends.
-	$basename = (string) $config['basename'];
+	// Choose which plugins THIS request loads: only Slice Backup. Restored plugins may be
+	// incomplete or incompatible until the restore ends, so their code must not run yet.
+	$basename    = (string) $config['basename'];
+	$maskNetwork = null;
 	if (!empty($config['multisite'])) {
-		add_filter('pre_site_option_active_sitewide_plugins', static function () use ($basename) {
+		$maskNetwork = static function () use ($basename) {
 			return array($basename => time());
-		}, PHP_INT_MAX);
+		};
+		add_filter('pre_site_option_active_sitewide_plugins', $maskNetwork, PHP_INT_MAX);
 	}
-	add_filter('pre_option_active_plugins', static function () use ($basename, $config) {
+	$maskActive = static function () use ($basename, $config) {
 		return empty($config['multisite']) ? array($basename) : array();
-	}, PHP_INT_MAX);
+	};
+	add_filter('pre_option_active_plugins', $maskActive, PHP_INT_MAX);
+
+	// WordPress has read the list of plugins to load by the time plugins_loaded runs, so the
+	// masks come straight back off here. From this point on - and so for every user action,
+	// including activating or deactivating a plugin on the Plugins screen or over WP-CLI -
+	// get_option() and update_option() see the site's real list. Without this, WordPress
+	// would read the masked list, add or remove the one plugin and save that back, switching
+	// every other plugin off. The restore never changes which plugins are active.
+	add_action('plugins_loaded', static function () use ($maskActive, $maskNetwork) {
+		remove_filter('pre_option_active_plugins', $maskActive, PHP_INT_MAX);
+		if ($maskNetwork !== null) {
+			remove_filter('pre_site_option_active_sitewide_plugins', $maskNetwork, PHP_INT_MAX);
+		}
+	}, -PHP_INT_MAX);
 
 	// Load no theme code. The real theme is checked and switched on when the restore ends.
 	// Read-only, for the same reason as above: it never blocks a user's own theme switch.
@@ -333,7 +376,8 @@ if (!defined('ABSPATH')) {
 	// WP-Cron gets its turn, then the maintenance page is sent.
 	add_action('wp_loaded', static function () {
 		if (!headers_sent()) {
-			$protocol = isset($_SERVER['SERVER_PROTOCOL']) && preg_match('#^HTTP/[0-9.]+$#', (string) $_SERVER['SERVER_PROTOCOL']) ? (string) $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1';
+			$given    = isset($_SERVER['SERVER_PROTOCOL']) ? sanitize_text_field(wp_unslash($_SERVER['SERVER_PROTOCOL'])) : '';
+			$protocol = preg_match('#^HTTP/[0-9.]+$#', $given) ? $given : 'HTTP/1.1';
 			header($protocol . ' 503 Service Unavailable', true, 503);
 			header('Retry-After: 120');
 			header('Content-Type: text/html; charset=utf-8');
@@ -349,5 +393,7 @@ if (!defined('ABSPATH')) {
 })();
 
 GUARD;
+
+        return str_replace("'%%SETTINGS_FILE%%'", var_export($settingsFile, true), $guard);
     }
 }

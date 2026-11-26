@@ -114,7 +114,11 @@ final class DropboxDestination implements Destination {
     private static function tokenRequest(array $body): array {
         $response = wp_remote_post(self::TOKEN_URL, array('timeout' => 30, 'body' => $body));
         if (is_wp_error($response)) {
-            throw new \RuntimeException(esc_html(sprintf(__('Could not reach Dropbox: %s', 'slice-backup'), $response->get_error_message()))); // phpcs:ignore WordPress.WP.I18n.MissingTranslatorsComment
+            throw new \RuntimeException(esc_html(sprintf(
+                /* translators: %s: error message. */
+                __('Could not reach Dropbox: %s', 'slice-backup'),
+                $response->get_error_message()
+            )));
         }
         $data = json_decode((string) wp_remote_retrieve_body($response), true);
         if ((int) wp_remote_retrieve_response_code($response) !== 200 || !is_array($data)) {

@@ -29,8 +29,12 @@ if (!defined('ABSPATH')) {
  * Undo and clean-up of a restore.
  */
 final class RestoreRollback {
-    /** Hidden folder (inside plugins/, themes/, mu-plugins/) holding replaced folders. */
-    public const OLD_DIR = '.slice-backup-old';
+    /**
+     * Start of the hidden folder name (inside plugins/, themes/) holding replaced folders.
+     * Each restore adds a random suffix, so the safety copy never sits at a path anyone can
+     * guess, and prepareHelperDir() blocks web access to it as well.
+     */
+    public const OLD_DIR_PREFIX = '.slice-backup-old-';
 
     /** Hidden folder (inside plugins/, themes/) holding a restore's new folders until the swap. */
     public const STAGING_DIR = '.slice-backup-staging';
@@ -38,27 +42,88 @@ final class RestoreRollback {
     /** Hidden folder used briefly while undoing. */
     private const TRASH_DIR = '.slice-backup-trash';
 
-    private static function file(): string {
-        return Storage::dir() . '/rollback.json';
-    }
+    /** Site option holding the safety-copy record. */
+    public const OPTION = 'slice_backup_rollback';
 
     /**
+     * The safety-copy record lives in the database, not in a file: it is privileged data
+     * (it names the tables and folders an undo would swap back) and belongs nowhere a
+     * visitor could reach.
+     *
      * @return array<string, mixed>|null
      */
     public static function load(): ?array {
-        $file = self::file();
-        if (!is_file($file)) {
-            return null;
+        $record = get_site_option(self::OPTION, null);
+        if ($record === null) {
+            $record = self::importLegacyFile();
         }
-        $data = json_decode((string) file_get_contents($file), true); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-        return is_array($data) ? $data : null;
+        return is_array($record) ? $record : null;
     }
 
     /**
      * @param array<string, mixed> $record
      */
     public static function save(array $record): void {
-        file_put_contents(self::file(), (string) wp_json_encode($record)); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+        update_site_option(self::OPTION, $record);
+    }
+
+    /**
+     * Forgets the safety copy (after an undo or a discard).
+     */
+    private static function forget(): void {
+        update_site_option(self::OPTION, false);
+    }
+
+    /**
+     * Version 1.1.0 and earlier kept this record in rollback.json in the backup folder.
+     * Read it once, move it into the database and delete the file.
+     *
+     * @return array<string, mixed>|false
+     */
+    private static function importLegacyFile() {
+        $record = false;
+        try {
+            $file = Storage::dir() . '/rollback.json';
+            if (is_file($file)) {
+                $data = json_decode((string) file_get_contents($file), true); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+                wp_delete_file($file);
+                if (is_array($data)) {
+                    $record = $data;
+                }
+            }
+        } catch (\Throwable $e) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+            // No backup folder (yet): there is nothing to carry over.
+        }
+        update_site_option(self::OPTION, $record);
+        return $record;
+    }
+
+    /**
+     * A fresh, unguessable folder name for this restore's safety copy.
+     */
+    public static function newOldDirName(): string {
+        return self::OLD_DIR_PREFIX . strtolower(wp_generate_password(16, false));
+    }
+
+    /**
+     * Creates one of this plugin's hidden working folders and blocks direct web access to it.
+     */
+    public static function prepareHelperDir(string $dir): void {
+        Storage::protectDirectory($dir);
+    }
+
+    /**
+     * Deletes every safety-copy folder left in $root, whatever its random suffix.
+     */
+    public static function purgeOldDirs(string $root): void {
+        foreach (is_dir($root) ? (array) scandir($root) : array() as $entry) {
+            if (!is_string($entry) || strpos($entry, self::OLD_DIR_PREFIX) !== 0) {
+                continue;
+            }
+            self::delete($root . '/' . $entry);
+        }
+        // Older versions used one fixed name.
+        self::delete($root . '/.slice-backup-old');
     }
 
     /**
@@ -151,7 +216,15 @@ final class RestoreRollback {
         if (!file_exists($from)) {
             return false;
         }
-        wp_mkdir_p(dirname($to));
+        $parent = dirname($to);
+        $name   = basename($parent);
+        if (strpos($name, self::OLD_DIR_PREFIX) === 0 || $name === self::TRASH_DIR) {
+            // The safety copy has to live next to the live folders so the swap is a single
+            // rename, so block direct web access to the replaced (possibly vulnerable) code.
+            self::prepareHelperDir($parent);
+        } else {
+            wp_mkdir_p($parent);
+        }
         if (file_exists($to)) {
             self::delete($to);
         }
@@ -164,13 +237,6 @@ final class RestoreRollback {
         } elseif (file_exists($path) || is_link($path)) {
             wp_delete_file($path);
         }
-    }
-
-    /**
-     * Where a replaced folder is kept: <root>/.slice-backup-old/<name>.
-     */
-    public static function oldPathFor(string $live): string {
-        return dirname($live) . '/' . self::OLD_DIR . '/' . basename($live);
     }
 
     /* ------------------------------------------------------------------ */
@@ -224,7 +290,7 @@ final class RestoreRollback {
             $folders++;
         }
         self::tidy($record);
-        wp_delete_file(self::file());
+        self::forget();
         wp_cache_flush();
 
         return array('tables' => count((array) ($record['tables'] ?? array())), 'folders' => $folders);
@@ -258,7 +324,7 @@ final class RestoreRollback {
             }
         }
         self::tidy($record);
-        wp_delete_file(self::file());
+        self::forget();
 
         return array('tables' => count($tables), 'folders' => $folders);
     }
@@ -276,17 +342,31 @@ final class RestoreRollback {
      * @param array<string, mixed> $record
      */
     private static function tidy(array $record): void {
-        $roots = array();
+        $dirs = array();
         foreach ((array) ($record['folders'] ?? array()) as $folder) {
-            $roots[dirname((string) $folder['live'])] = true;
-        }
-        foreach (array_keys($roots) as $root) {
-            foreach (array(self::OLD_DIR, self::TRASH_DIR) as $helper) {
-                $dir = $root . '/' . $helper;
-                if (is_dir($dir) && count((array) scandir($dir)) <= 2) {
-                    Storage::filesystem()->rmdir($dir);
-                }
+            $dirs[dirname((string) $folder['live']) . '/' . self::TRASH_DIR] = true;
+            if (!empty($folder['old'])) {
+                $dirs[dirname((string) $folder['old'])] = true;
             }
+        }
+        foreach (array_keys($dirs) as $dir) {
+            self::removeIfEmpty($dir);
+        }
+    }
+
+    /**
+     * Removes a helper folder once nothing but its web-access protection is left in it.
+     */
+    private static function removeIfEmpty(string $dir): void {
+        if (!is_dir($dir) || strpos(basename($dir), '.slice-backup-') !== 0) {
+            return;
+        }
+        $left = array_diff(
+            (array) scandir($dir),
+            array_merge(array('.', '..'), Storage::PROTECTION_FILES)
+        );
+        if (count($left) === 0) {
+            Storage::removeDirectory($dir);
         }
     }
 }

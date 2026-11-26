@@ -1,10 +1,10 @@
 === Slice Backup – Backup, Restore & Migration ===
-Contributors: gj437264, wpengineers
+Contributors: gj437264
 Tags: backup, migration, restore, cloud backup, encryption
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.1.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -115,7 +115,13 @@ Only administrators can use Slice Backup; on WordPress Multisite installations, 
 
 Backup bundles receive long, random filenames. The temporary backup directory is blocked from direct web access on supported Apache and IIS configurations, and the System tab tests whether backup bundles can be downloaded directly from the web and provides the configuration rule required for environments such as Nginx.
 
-Archives are checked for path traversal / Zip Slip attacks before extraction. Authentication keys, salts, and the database password are redacted from the wp-config.php copy stored in a bundle, and wp-config.php contained inside a backup bundle is never applied during restoration.
+Archives are checked for path traversal / Zip Slip attacks before extraction. Authentication keys, salts, the cookie hash and the database password are redacted from the wp-config.php copy stored in a bundle, whether they are declared with `define()` or `const` and whatever the value is (a quoted string, a call such as `getenv()`, or any other expression); the redaction uses PHP's own tokenizer, so a bracket or semicolon inside a key cannot leave part of it behind. wp-config.php contained inside a backup bundle is never applied during restoration.
+
+The site's authentication keys and salts are themselves only ever used on the site: `wp_salt()` derives the local key that encrypts saved passphrases and cloud secrets, and that derived key is never written to a bundle, logged or transmitted.
+
+While a restore is running, Slice Backup adds one temporary must-use plugin, `0-slice-backup-restore-guard.php`. A restore replaces the database and the plugin and theme files over many requests, and that file is what stops a half-copied or PHP-incompatible plugin from taking the site down while it happens: during the restore, a request loads only Slice Backup and no theme code, and visitors get a "back in a few minutes" page. It chooses which plugins a request loads and stops doing so at `plugins_loaded`, so activating or deactivating a plugin yourself during a restore still reads and writes your site's real list — a restore never changes which plugins are active. WordPress loads must-use plugins from `WPMU_PLUGIN_DIR` only, so there is no other location this file could work from. It is removed as soon as the restore ends, removes itself if the restore stops making progress, and is deleted when the plugin is uninstalled.
+
+Everything else Slice Backup writes goes to its own folder inside `wp_upload_dir()` — bundles, each job's working files, the restore guard's settings and the restore report — or to the database, and that folder denies direct web access. A restore also needs two hidden folders beside `wp-content/plugins` and `wp-content/themes`, because the new folders are swapped in with a single rename and the folders they replace are kept there as the safety copy; the safety copy's folder is given a random name and the same deny rules, and is removed when the safety copy is dropped.
 
 Webhook requests are sent using WordPress's `wp_safe_remote_post()` function, which prevents requests to internal addresses.
 
@@ -156,34 +162,47 @@ Settings, scheduled tasks, and temporary files are removed. Backup bundles are r
 
 = Does the plugin send data anywhere? =
 
-Only to destinations that you explicitly configure: your own cloud storage account, your SFTP server, your Dropbox account, another WordPress site for which you have created a transfer key, the email address you configure for notifications, or the webhook URL you configure. Slice Backup does not send your backup data to the plugin authors. See "External services" below for details on each one.
+Only to destinations that you explicitly configure or use: your own cloud storage account, your SFTP server, your Dropbox account, a share link you paste in, another WordPress site for which you have created a transfer key, the email address you configure for notifications, or the webhook URL you configure. WordPress.org is contacted in one case only: if a restore has to install a default theme because the restored theme is not compatible. Slice Backup does not send your backup data to the plugin authors. See "External services" below for details on each one.
 
 == External services ==
 
-Each external service below is contacted only after you configure or explicitly use it, with your own account, credentials, or a link you paste in. Slice Backup does not phone home or send data to its own authors.
+Each external service below is contacted only after you configure or explicitly use it, with your own account, credentials, or a link you paste in. Slice Backup does not phone home and sends nothing to its own authors. No external service is contacted on a normal page load, on activation, or by a backup that is kept on the server.
 
-**Cloud storage (S3-compatible).** Used to store and retrieve your backup bundles in a bucket you own. Only contacted when you configure cloud storage and run a backup, restore, "Test Connection", or retention-cleanup operation; at that time the bundle's bytes (upload/download) and the request metadata needed to address and sign the call (bucket name, object key, your access key, standard S3 request headers) are sent to the endpoint you configured.
+**Cloud storage (S3-compatible).** Used to store and retrieve your backup bundles in a bucket you own. Contacted only when you have configured cloud storage and you run a backup, a restore, "Test Connection", or a retention cleanup. What is sent at that time: the bundle's bytes (upload or download), and the request metadata needed to address and sign the call — bucket name, object key, your access key ID, the AWS Signature V4 headers, and the object listing/delete requests retention needs. The host contacted is the endpoint of the provider you selected, shown in the settings screen: `s3.{region}.amazonaws.com`, `{account}.r2.cloudflarestorage.com`, `storage.googleapis.com`, `s3.{region}.wasabisys.com`, `s3.{region}.backblazeb2.com`, `{region}.digitaloceanspaces.com`, or the custom endpoint you enter yourself.
 
 * Amazon S3 — [Terms](https://aws.amazon.com/agreement/), [Privacy](https://aws.amazon.com/privacy/)
 * Cloudflare R2 — [Terms](https://www.cloudflare.com/service-specific-terms-application-services/), [Privacy](https://www.cloudflare.com/privacypolicy/)
 * Google Cloud Storage (via HMAC keys) — [Terms](https://cloud.google.com/terms), [Privacy](https://policies.google.com/privacy)
-* Wasabi — [Terms](https://wasabi.com/legal-terms/), [Privacy](https://wasabi.com/privacy-policy/)
+* Wasabi — [Terms](https://wasabi.com/legal), [Privacy](https://wasabi.com/legal/privacy-policy)
 * Backblaze B2 — [Terms](https://www.backblaze.com/company/terms.html), [Privacy](https://www.backblaze.com/company/privacy.html)
 * DigitalOcean Spaces — [Terms](https://www.digitalocean.com/legal/terms-of-service-agreement), [Privacy](https://www.digitalocean.com/legal/privacy-policy)
-* MinIO, or another custom S3-compatible endpoint you point the plugin at — this is infrastructure you (or your own host) operate or choose; review that provider's own terms and privacy policy.
+* MinIO, or another custom S3-compatible endpoint you point the plugin at — this is infrastructure you (or your own host) operate or choose; review that provider's own terms and privacy policy. MinIO project: [min.io](https://min.io/)
 
-**Dropbox** (storage destination, and importing a shared link). Only contacted when you connect a Dropbox account as a destination, run a backup/restore/"Test Connection" against it, or paste a Dropbox share link to import. Slice Backup communicates with `api.dropboxapi.com` and `content.dropboxapi.com`, sending the bundle's bytes and an OAuth 2 access token for your own Dropbox app; storage operations are confined to that app's App folder. [Dropbox Terms](https://www.dropbox.com/terms), [Dropbox Privacy Policy](https://www.dropbox.com/privacy).
+**Dropbox** (storage destination, and importing a shared link). Contacted only when you connect a Dropbox account as a destination, run a backup, restore or "Test Connection" against it, or paste a Dropbox share link to import. Hosts contacted: `www.dropbox.com` (the OAuth 2 PKCE authorisation page you open yourself), `api.dropboxapi.com` and `content.dropboxapi.com`. What is sent: the bundle's bytes, the file name and folder path inside the app folder, and an OAuth 2 access token for the Dropbox app you created in your own account. Storage operations are confined to that app's App folder. [Dropbox Terms](https://www.dropbox.com/terms), [Dropbox Privacy Policy](https://www.dropbox.com/privacy).
 
-**Google Drive and OneDrive/SharePoint** (importing a shared link). Used only by the "Import from a link" feature. Only contacted when you paste a public "share" link and start the import: Slice Backup sends an HTTP GET request (with a Range header) to the provider's file-content URL for that specific link; it does not sign in to, browse, or access anything else in your Google or Microsoft account.
+**Google Drive and OneDrive/SharePoint** (importing a shared link). Used only by the "Import from a link" feature. Contacted only when you paste a public "share" link and start the import: Slice Backup sends an HTTP GET request (with a Range header, and no credentials) to the provider's file-content URL for that specific link, and receives the bundle's bytes. Hosts contacted: `drive.google.com`, `docs.google.com` and `drive.usercontent.google.com` for a Google Drive link; `1drv.ms`, `onedrive.live.com`, `api.onedrive.com` and your `*.sharepoint.com` host for a OneDrive or SharePoint link. Nothing else in your Google or Microsoft account is signed in to, browsed or accessed.
 
 * Google Drive — [Terms](https://policies.google.com/terms), [Privacy Policy](https://policies.google.com/privacy)
-* OneDrive / SharePoint — [Microsoft Services Agreement](https://www.microsoft.com/en-us/servicesagreement), [Microsoft Privacy Statement](https://privacy.microsoft.com/en-us/privacystatement)
+* OneDrive / SharePoint — [Microsoft Services Agreement](https://www.microsoft.com/en-us/servicesagreement), [Microsoft Privacy Statement](https://www.microsoft.com/en-us/privacy/privacystatement)
 
-**SFTP.** Slice Backup communicates with the SFTP server that you configure, sending/receiving the bundle's bytes using the credentials or key you provide. This is typically your own server or one operated by your own host.
+**SFTP.** Contacted only when you configure an SFTP destination and run a backup, restore or "Test Connection". Slice Backup connects to the host and port you enter and sends the user name and the password or private key you provide, then transfers the bundle's bytes. This is typically your own server or one operated by your own host; review its operator's terms and privacy policy.
 
-**Site-to-site transfer.** Slice Backup communicates with another WordPress site only when you create or enter a valid transfer key, sending (or receiving) the backup bundle directly between the two sites you control.
+**WordPress.org.** Contacted in one case: when a restore finds that the restored theme cannot run on this server's PHP version and no default theme is installed to fall back on, Slice Backup downloads one from `downloads.wordpress.org` (for example `https://downloads.wordpress.org/theme/twentytwentyfour.latest-stable.zip`), exactly as WordPress itself does when installing a theme. The request carries no site data beyond what any HTTP request includes. [WordPress.org Privacy Policy](https://wordpress.org/about/privacy/)
 
-**Webhooks.** Only contacted when you configure a webhook URL. After each scheduled backup, Slice Backup sends a JSON summary (success/failure, size, duration) to that URL via an HTTP POST. Since the URL is one you supply, review that destination's own terms and privacy policy.
+**Site-to-site transfer.** Contacted only when you create or enter a valid transfer key. Slice Backup then sends (or receives) the backup bundle directly between the two WordPress sites you control, over the REST API of the other site, with each request signed using HMAC-SHA256. The host contacted is the address of the other site, which you supply.
+
+**Webhooks.** Contacted only when you configure a webhook URL. After each scheduled backup, Slice Backup sends a JSON summary to that URL via an HTTP POST: whether the backup succeeded or failed, your site's URL, the bundle's file name and size, the job's identifier, and any error or warning text. No backup content is sent. Since the URL is one you supply, review that destination's own terms and privacy policy.
+
+**Email notifications.** Sent through WordPress's own `wp_mail()` to the address you configure, so they go out through your site's existing mail setup, not through any service of ours.
+
+== Third-party libraries ==
+
+Slice Backup bundles two libraries, both under the MIT license, which is GPL-compatible. Their unmodified source is included in the plugin, and each folder keeps the library's own license file.
+
+* phpseclib 3.0.58 (`vendor/phpseclib`, [source](https://github.com/phpseclib/phpseclib), MIT) — the SSH and SFTP implementation used by the SFTP destination. If another plugin has already loaded phpseclib 3, Slice Backup uses that copy instead of its own.
+* paragonie/constant_time_encoding 2.8.2 (`vendor/constant_time_encoding`, [source](https://github.com/paragonie/constant_time_encoding), MIT) — required by phpseclib.
+
+Nothing else is bundled: everything WordPress already ships is used from WordPress.
 
 == Hooks & Filters ==
 
@@ -192,6 +211,18 @@ Filters: `slice_backup_required_capability`, `slice_backup_chunk_size`, `slice_b
 Actions: `slice_backup_before_export`, `slice_backup_after_export`, `slice_backup_before_restore`, `slice_backup_after_restore`.
 
 == Changelog ==
+
+= 1.1.1 =
+* The wp-config.php copy kept in a bundle now has its authentication keys, salts, cookie hash and database password removed however they are declared — `define()` or `const`, and with any kind of value, including `getenv()` and other expressions. The redaction uses PHP's own tokenizer.
+* The redacted copy is written as a work file with a random name and a .txt extension, instead of a loose .php file.
+* The restore guard no longer keeps its settings in the must-use plugins folder; they live with the restore job's other working files under wp-content/uploads. Only the must-use plugin itself, which can work nowhere else, is still written there.
+* The restore guard stops choosing which plugins load at `plugins_loaded`, so activating or deactivating a plugin while a restore runs always reads and writes the site's real list. A restore can no longer switch other plugins off by saving a masked list back.
+* The folder holding a restore's safety copy now gets a random name and deny-all rules, so replaced plugin and theme code is not left at a path that can be requested.
+* The safety-copy record moved from a JSON file in the backup folder into the database.
+* Bundles taken in from a browser upload, a share link, another site or WP-CLI are stored under an unguessable file name, like the ones this plugin creates itself.
+* "Import from a link" now refuses a link that is not a public address and fetches with `wp_safe_remote_get()`, so neither a pasted link nor a redirect can make the site request a private or loopback address.
+* Removed the placeholder translation template; translations are supplied by WordPress.org.
+* readme: corrected the Wasabi and Microsoft policy links, documented every external service's hosts, the data sent, and the one case in which WordPress.org is contacted, and listed the bundled libraries and their licenses.
 
 = 1.1.0 =
 * Imports can now be fetched directly from a public Google Drive, OneDrive/SharePoint or Dropbox share link, without downloading the bundle locally first.
@@ -204,6 +235,9 @@ Actions: `slice_backup_before_export`, `slice_backup_after_export`, `slice_backu
 First public beta release. Includes resumable backups and restores, AES-256-GCM encryption, S3-compatible cloud storage, SFTP support, Dropbox support, site-to-site push and pull, scheduled backups, Grandfather-Father-Son retention, serialization-safe URL replacement, PHP compatibility checks, WP-CLI integration, REST API, Multisite migration support, and security-focused backup and transfer workflows.
 
 == Upgrade Notice ==
+
+= 1.1.1 =
+Security and file-location hardening: stronger wp-config.php redaction, unguessable private locations for a restore's safety copy and for imported bundles, and a restore guard that can no longer affect which plugins are active.
 
 = 1.1.0 =
 Restores now keep a safety copy and can be rolled back; see the Restore tab after upgrading.

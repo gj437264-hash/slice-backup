@@ -4,12 +4,12 @@
 [![PHP](https://img.shields.io/badge/PHP-7.4%2B-777BB4?logo=php&logoColor=white)](https://www.php.net/)
 [![License](https://img.shields.io/badge/License-GPLv2%2B-blue)](https://www.gnu.org/licenses/gpl-2.0.html)
 
-**Contributors:** gj437264, wpengineers  
+**Contributors:** gj437264  
 **Tags:** backup, migration, restore, cloud backup, encryption  
 **Requires at least:** 6.2  
 **Tested up to:** 7.1  
 **Requires PHP:** 7.4  
-**Stable tag:** 1.1.0
+**Stable tag:** 1.1.1
 **License:** GPLv2 or later
 
 Back up, move and restore WordPress sites in resumable steps, encrypted, scheduled, to your own cloud storage or another server.
@@ -341,7 +341,18 @@ The **System** tab tests whether backup bundles can be downloaded directly from 
 
 Archives are checked for **path traversal / Zip Slip** attacks before extraction.
 
+Authentication keys, salts, the cookie hash and the database password are redacted from the `wp-config.php` copy stored in a bundle — whether declared with `define()` or `const`, and whatever the value is (a quoted string, a call such as `getenv()`, or any other expression). The redaction uses PHP's own tokenizer, so a bracket or semicolon inside a key cannot leave part of it behind.
+
 `wp-config.php` contained inside a backup bundle is **never applied during restoration**.
+
+### Where the plugin writes
+
+Everything Slice Backup writes goes to its own folder inside `wp_upload_dir()` — bundles, each job's working files, the restore guard's settings and the restore report — or to the database, and that folder denies direct web access.
+
+Two exceptions, both required by what they do:
+
+- **The restore guard**, `0-slice-backup-restore-guard.php`, a temporary must-use plugin added only while a restore runs. WordPress loads must-use plugins from `WPMU_PLUGIN_DIR` only, so there is no other location it could work from. It keeps restored plugin and theme code from loading half-copied, chooses which plugins a request loads and stops doing so at `plugins_loaded` — so activating or deactivating a plugin during a restore still reads and writes the site's real list, and a restore never changes which plugins are active. It is removed when the restore ends, removes itself if the restore stops making progress, and is deleted on uninstall.
+- **Two hidden folders beside `wp-content/plugins` and `wp-content/themes`**, because restored folders are swapped in with a single rename and the folders they replace are kept there as the safety copy. The safety copy's folder is given a random name and the same deny rules, and is removed when the safety copy is dropped.
 
 ### Webhook Security
 
@@ -500,7 +511,7 @@ Supported providers, with their own terms and privacy policy:
 - **Amazon S3** — [Terms](https://aws.amazon.com/agreement/), [Privacy](https://aws.amazon.com/privacy/)
 - **Cloudflare R2** — [Terms](https://www.cloudflare.com/service-specific-terms-application-services/), [Privacy](https://www.cloudflare.com/privacypolicy/)
 - **Google Cloud Storage** (via HMAC keys) — [Terms](https://cloud.google.com/terms), [Privacy](https://policies.google.com/privacy)
-- **Wasabi** — [Terms](https://wasabi.com/legal-terms/), [Privacy](https://wasabi.com/privacy-policy/)
+- **Wasabi** — [Terms](https://wasabi.com/legal), [Privacy](https://wasabi.com/legal/privacy-policy)
 - **Backblaze B2** — [Terms](https://www.backblaze.com/company/terms.html), [Privacy](https://www.backblaze.com/company/privacy.html)
 - **DigitalOcean Spaces** — [Terms](https://www.digitalocean.com/legal/terms-of-service-agreement), [Privacy](https://www.digitalocean.com/legal/privacy-policy)
 - **MinIO, or another custom S3-compatible endpoint you point the plugin at** — this is infrastructure you (or your own host) operate or choose; review that provider's own terms and privacy policy.
@@ -521,7 +532,7 @@ Used only by the **"Import from a link"** feature, so a backup bundle can be pul
 Only contacted when you paste a public "share" link and start the import. Slice Backup sends an HTTP GET request (with a Range header) to the provider's file-content URL for that specific link; it does not sign in to, browse, or access anything else in your Google or Microsoft account.
 
 - **Google Drive** — [Terms](https://policies.google.com/terms), [Privacy Policy](https://policies.google.com/privacy)
-- **OneDrive / SharePoint** — [Microsoft Services Agreement](https://www.microsoft.com/en-us/servicesagreement), [Microsoft Privacy Statement](https://privacy.microsoft.com/en-us/privacystatement)
+- **OneDrive / SharePoint** — [Microsoft Services Agreement](https://www.microsoft.com/en-us/servicesagreement), [Microsoft Privacy Statement](https://www.microsoft.com/en-us/privacy/privacystatement)
 
 ### SFTP
 
@@ -585,6 +596,19 @@ slice_backup_after_restore
 ---
 
 ## Changelog
+
+### 1.1.1
+
+- The `wp-config.php` copy kept in a bundle now has its authentication keys, salts, cookie hash and database password removed however they are declared — `define()` or `const`, and with any kind of value, including `getenv()` and other expressions. The redaction uses PHP's own tokenizer.
+- The redacted copy is written as a work file with a random name and a `.txt` extension, instead of a loose `.php` file.
+- The restore guard no longer keeps its settings in the must-use plugins folder; they live with the restore job's other working files under `wp-content/uploads`. Only the must-use plugin itself, which can work nowhere else, is still written there.
+- The restore guard stops choosing which plugins load at `plugins_loaded`, so activating or deactivating a plugin while a restore runs always reads and writes the site's real list. A restore can no longer switch other plugins off by saving a masked list back.
+- The folder holding a restore's safety copy now gets a random name and deny-all rules, so replaced plugin and theme code is not left at a path that can be requested.
+- The safety-copy record moved from a JSON file in the backup folder into the database.
+- Bundles taken in from a browser upload, a share link, another site or WP-CLI are stored under an unguessable file name, like the ones this plugin creates itself.
+- "Import from a link" now refuses a link that is not a public address and fetches with `wp_safe_remote_get()`, so neither a pasted link nor a redirect can make the site request a private or loopback address.
+- Removed the placeholder translation template; translations are supplied by WordPress.org.
+- readme: corrected the Wasabi and Microsoft policy links, documented every external service's hosts, the data sent, and the one case in which WordPress.org is contacted, and listed the bundled libraries and their licenses.
 
 ### 1.1.0
 

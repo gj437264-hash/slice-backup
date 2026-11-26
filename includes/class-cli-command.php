@@ -474,7 +474,9 @@ final class CliCommand {
             if (dirname($real) === $dir) {
                 return basename($real);
             }
-            $name = wp_unique_filename($dir, sanitize_file_name(basename($file)));
+            // The copy is given an unguessable name: the backup folder denies web access,
+            // but a bundle must not be reachable by guessing its file name either.
+            $name = wp_unique_filename($dir, Storage::importName(basename($file)));
             if (!Storage::isBundleName($name)) {
                 \WP_CLI::error('The bundle must be a .zip file.');
             }

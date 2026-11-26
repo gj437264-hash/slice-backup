@@ -2099,9 +2099,13 @@ class MigratorEngine {
                     $old['folders']
                 ));
             }
+            // One unguessable, web-denied folder per restore holds the replaced plugin and
+            // theme folders, so old (possibly vulnerable) code is never left at a path
+            // anyone could request.
+            $oldDir  = RestoreRollback::newOldDirName();
             $folders = array();
             foreach (self::stagingRoots() as $component => $root) {
-                RestoreRollback::delete($root . '/' . RestoreRollback::OLD_DIR);
+                RestoreRollback::purgeOldDirs($root);
                 $staging = $root . '/' . RestoreRollback::STAGING_DIR;
                 foreach (is_dir($staging) ? (array) scandir($staging) : array() as $entry) {
                     if (!is_string($entry) || $entry === '.' || $entry === '..') {
@@ -2111,7 +2115,7 @@ class MigratorEngine {
                         'component' => $component,
                         'staged'    => $staging . '/' . $entry,
                         'live'      => $root . '/' . $entry,
-                        'old'       => $root . '/' . RestoreRollback::OLD_DIR . '/' . $entry,
+                        'old'       => $root . '/' . $oldDir . '/' . $entry,
                     );
                 }
             }
@@ -2351,7 +2355,9 @@ class MigratorEngine {
             case 'pull':
             case 'link_import':
                 if ($job->type === 'pull' || $job->type === 'link_import') {
-                    $job->data['name'] = wp_unique_filename(Storage::dir(), (string) $job->data['name']);
+                    // The name came from the other site or the share link: keep it only as a
+                    // label and store the bundle under an unguessable name of our own.
+                    $job->data['name'] = wp_unique_filename(Storage::dir(), Storage::importName((string) $job->data['name']));
                 }
                 $final = Storage::dir() . '/' . $job->data['name'];
                 if (!@rename((string) $job->data['part'], $final)) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.rename_rename

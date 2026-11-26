@@ -71,10 +71,11 @@ final class Plugin {
         $job = Job::active();
         if ($job !== null && $job->type === 'restore') {
             // A restore is replacing this site: ask it to stop safely rather than pulling the
-            // guard away mid-copy. The guard only masks reads during its own requests, so this
-            // deactivation (and the active_plugins change WordPress saves right after this
-            // hook returns) still takes effect; the guard removes itself once the restore ends
-            // or, failing that, after RestoreGuard::MAX_IDLE_SECONDS of no progress.
+            // guard away mid-copy. The guard chooses which plugins a request loads and stops
+            // doing so at plugins_loaded, so this deactivation (and the active_plugins change
+            // WordPress saves right after this hook returns) is made against the site's real
+            // list and takes effect; the guard removes itself once the restore ends or,
+            // failing that, after RestoreGuard::MAX_IDLE_SECONDS of no progress.
             $job->requestCancel();
             return;
         }
@@ -150,7 +151,9 @@ final class Plugin {
 
         wp_enqueue_style('slicebk-admin', SLICE_BACKUP_URL . 'assets/css/admin.css', array('dashicons'), SLICE_BACKUP_VERSION);
         wp_enqueue_script('slicebk-admin', SLICE_BACKUP_URL . 'assets/js/admin.js', array('wp-i18n'), SLICE_BACKUP_VERSION, true);
-        wp_set_script_translations('slicebk-admin', 'slice-backup', SLICE_BACKUP_PATH . 'languages');
+        // No path: translations come from WordPress.org and land in WP_LANG_DIR/plugins,
+        // which is where WordPress looks when no folder is given.
+        wp_set_script_translations('slicebk-admin', 'slice-backup');
 
         $config = array(
             'ajaxUrl'       => admin_url('admin-ajax.php'),

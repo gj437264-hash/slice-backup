@@ -140,7 +140,7 @@ class StreamingArchiver {
             $add(WP_PLUGIN_DIR, 'plugins', 'plugins', array($selfDir));
         }
         if (!empty($components['mu_plugins'])) {
-            $add(defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins', 'mu-plugins', 'mu_plugins', array(RestoreGuard::path(), RestoreGuard::configPath()));
+            $add(defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins', 'mu-plugins', 'mu_plugins', array(RestoreGuard::path(), RestoreGuard::legacyConfigPath()));
         }
         if (!empty($components['languages'])) {
             $add(defined('WP_LANG_DIR') ? WP_LANG_DIR : WP_CONTENT_DIR . '/languages', 'languages', 'languages', array());
@@ -161,9 +161,16 @@ class StreamingArchiver {
             if (!empty($components['root_files']) && preg_match(self::ROOT_FILES_PATTERN, $file)) {
                 $source = ABSPATH . $file;
                 if ($file === 'wp-config.php') {
-                    // Never carry the live auth keys/salts or DB password off-site.
-                    $redacted = dirname($listFile) . '/wp-config.redacted.php';
-                    file_put_contents($redacted, SecuritySanitizer::redactWpConfig((string) file_get_contents($source))); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents, WordPress.WP.AlternativeFunctions.file_system_read_file_get_contents
+                    // Never carry the live auth keys/salts or DB password off-site. The
+                    // redacted copy is a work file: it goes into the job's own folder under
+                    // wp-content/uploads, under an unguessable name and a .txt extension so
+                    // it is never a loose executable PHP file, and it is deleted with the job.
+                    $redacted = dirname($listFile) . '/wp-config-redacted-' . strtolower(wp_generate_password(20, false)) . '.txt';
+                    $written  = file_put_contents($redacted, SecuritySanitizer::redactWpConfig((string) file_get_contents($source))); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents, WordPress.WP.AlternativeFunctions.file_system_read_file_get_contents
+                    if ($written === false) {
+                        // Rather than fall back to the original, leave wp-config.php out.
+                        continue;
+                    }
                     $source = $redacted;
                 }
                 $lines .= self::line('root/' . $file, $source);

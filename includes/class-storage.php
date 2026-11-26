@@ -19,6 +19,9 @@ if (!defined('ABSPATH')) {
 final class Storage {
     public const DIR_NAME = 'slice-backup-temp';
 
+    /** The files protectDirectory() writes; a folder holding only these counts as empty. */
+    public const PROTECTION_FILES = array('.htaccess', 'web.config', 'index.php', 'index.html');
+
     private const LOCK_OPTION = 'slice_backup_lock';
     private const LOCK_TTL    = 7200;
 
@@ -48,7 +51,7 @@ final class Storage {
             );
         }
 
-        self::protect($dir);
+        self::protectDirectory($dir);
         self::$dir = $dir;
         return $dir;
     }
@@ -80,10 +83,18 @@ final class Storage {
     }
 
     /**
-     * Writes deny-all rules for Apache and IIS plus empty index files.
-     * Nginx ignores these files; the System tab tests and explains that case.
+     * Blocks direct web access to a folder this plugin created: deny-all rules for Apache
+     * and IIS plus empty index files. Nginx ignores these files; the System tab tests and
+     * explains that case. Used for the backup folder and for the hidden working folder a
+     * restore keeps inside wp-content/plugins and wp-content/themes, which has to sit next
+     * to the live folders to be swapped in with a single rename but must never be reachable
+     * over the web.
      */
-    private static function protect(string $dir): void {
+    public static function protectDirectory(string $dir): void {
+        if (!is_dir($dir) && !wp_mkdir_p($dir)) {
+            return;
+        }
+
         $files = array(
             '.htaccess'  => "# Slice Backup: deny all web access to backups.\n"
                 . "<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n"
@@ -147,6 +158,28 @@ final class Storage {
             gmdate('Ymd-His'),
             strtolower(wp_generate_password(12, false))
         );
+    }
+
+    /**
+     * A hard-to-guess name for a bundle taken in from outside: uploaded in the browser,
+     * fetched from a share link or another site, or copied in with WP-CLI. The incoming
+     * name is only a label; a random token is always added so a stored bundle can never be
+     * requested by guessing its name, on top of the folder's deny rules.
+     */
+    public static function importName(string $name): string {
+        $name      = sanitize_file_name($name);
+        $extension = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+        if ($extension !== 'slicebk') {
+            $extension = 'zip';
+        }
+
+        $base = (string) preg_replace('/[^A-Za-z0-9._-]+/', '-', (string) pathinfo($name, PATHINFO_FILENAME));
+        $base = ltrim(substr($base, 0, 60), '._-');
+        if ($base === '') {
+            $base = 'bundle';
+        }
+
+        return $base . '-' . strtolower(wp_generate_password(12, false)) . '.' . $extension;
     }
 
     /**
@@ -391,7 +424,7 @@ final class Storage {
             $name = (string) preg_replace('/\.slicebk$/i', '.zip', $name);
         }
 
-        $final = wp_unique_filename(self::dir(), $name);
+        $final = wp_unique_filename(self::dir(), self::importName($name));
         if (!rename($part, self::dir() . '/' . $final)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename
             throw new \RuntimeException(esc_html__('Could not save the uploaded bundle.', 'slice-backup'));
         }
